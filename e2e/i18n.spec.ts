@@ -3,6 +3,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { PRODUCT_NAME } from "../src/shared/brand.ts";
 import { dirOf, format, LANGS, placeholders } from "../src/shared/i18n.ts";
 import { MESSAGES } from "../src/shared/messages/index.ts";
+import { SEO } from "../src/shared/seo/index.ts";
 import { mockSources, save, waitRounds } from "./helpers.ts";
 
 const ALL_OK = { edge: 0, akamai: 0, nict: 0, timeapi: 0, timenow: 0 };
@@ -11,6 +12,8 @@ const SCREENSHOT_LANGS = ["ja", "en", "ar", "de", "zh-CN"] as const;
 
 const unescape = (s: string) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 const text = (key: string, lang: keyof typeof MESSAGES) => format(MESSAGES[lang][key as keyof (typeof MESSAGES)["en"]], { name: PRODUCT_NAME });
+const seoText = (key: "title" | "description", lang: keyof typeof SEO) => format(SEO[lang][key], { name: PRODUCT_NAME });
+const canonicalPath = (lang: string) => (lang === "en" ? "/" : `/${lang}/`);
 
 test("全言語のメッセージに、英語と同じキーがあり、空でなく、差し込みの名前が一致する", async ({}, info) => {
 	test.skip(info.project.name !== "desktop", "ブラウザを使わない検査なので1回で十分");
@@ -45,15 +48,15 @@ test("JavaScript なしで各言語のURLを取得すると、翻訳済みの HT
 		const htmlTag = /<html[^>]*>/.exec(html)![0];
 		expect(htmlTag, path).toContain(`lang="${lang}"`);
 		expect(htmlTag, path).toContain(`dir="${dirOf(lang)}"`);
-		expect(unescape(/<title[^>]*>([^<]*)<\/title>/.exec(html)![1]), path).toBe(text("title", lang));
-		expect(unescape(/<meta name="description"[^>]*content="([^"]*)"/.exec(html)![1]), path).toBe(text("description", lang));
+		expect(unescape(/<title[^>]*>([^<]*)<\/title>/.exec(html)![1]), path).toBe(seoText("title", lang));
+		expect(unescape(/<meta name="description"[^>]*content="([^"]*)"/.exec(html)![1]), path).toBe(seoText("description", lang));
 		const alternates = [...html.matchAll(/<link rel="alternate" hreflang="([^"]+)" href="([^"]+)">/g)].map((m) => [m[1], new URL(m[2]).pathname]);
-		expect(alternates, path).toEqual([...LANGS.map((l) => [l.tag, `/${l.tag}/`]), ["x-default", "/"]]);
-		expect(new URL(/<link rel="canonical" href="([^"]+)">/.exec(html)![1]).pathname, path).toBe(path);
+		expect(alternates, path).toEqual([...LANGS.map((l) => [l.tag, canonicalPath(l.tag)]), ["x-default", "/"]]);
+		expect(new URL(/<link rel="canonical" href="([^"]+)">/.exec(html)![1]).pathname, path).toBe(canonicalPath(lang));
 		const filled = [...html.matchAll(/data-i18n="([^"]+)"[^>]*>([^<]*)</g)];
 		expect(filled.length, path).toBeGreaterThan(20);
 		for (const [, key, value] of filled) expect(unescape(value), `${path} ${key}`).toBe(text(key, lang));
-		rows.push({ path, lang, dir: dirOf(lang), title: text("title", lang), alternates: alternates.length, translatedElements: filled.length });
+		rows.push({ path, lang, dir: dirOf(lang), title: seoText("title", lang), alternates: alternates.length, translatedElements: filled.length });
 	}
 
 	const unknown = await request.get("/xx/", { maxRedirects: 0 });

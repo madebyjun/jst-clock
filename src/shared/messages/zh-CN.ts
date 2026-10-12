@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — 测量视频时间偏差的毫秒时钟",
-	description: "用摄像机拍摄的毫秒级时钟。它交叉核对多个时间源并显示保证成立的误差上限，可用于测量录像中的时间码偏差。",
 	settings: "设置",
 	timezone: "时区",
 	timezoneSearch: "搜索时区",

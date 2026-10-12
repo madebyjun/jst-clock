@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — ceas la milisecundă pentru măsurarea decalajului video",
-	description: "Un ceas precis la milisecundă pe care îl filmezi cu camera. Compară mai multe surse de timp și afișează o limită de eroare garantată, ca să poți măsura decalajul timecode-ului din înregistrări.",
 	settings: "Setări",
 	timezone: "Fus orar",
 	timezoneSearch: "Caută fus orar",

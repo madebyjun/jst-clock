@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — milisekundové hodiny na meranie časového posunu videa",
-	description: "Hodiny s presnosťou na milisekundu, ktoré nasnímate kamerou. Porovnávajú viacero zdrojov času a ukazujú zaručenú hranicu chyby, takže môžete zmerať posun časového kódu vo svojich záznamoch.",
 	settings: "Nastavenia",
 	timezone: "Časové pásmo",
 	timezoneSearch: "Hľadať časové pásmo",

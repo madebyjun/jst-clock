@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — millisekundur til at måle tidsforskydning i video",
-	description: "Et millisekundpræcist ur, som du filmer med dit kamera. Det sammenholder flere tidskilder og viser en garanteret fejlgrænse, så du kan måle tidskodens forskydning i dine optagelser.",
 	settings: "Indstillinger",
 	timezone: "Tidszone",
 	timezoneSearch: "Søg efter tidszone",

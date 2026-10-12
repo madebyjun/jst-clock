@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — jam milidetik untuk mengukur selisih waktu video",
-	description: "Jam berpresisi milidetik untuk direkam dengan kamera. Jam ini mencocokkan beberapa sumber waktu dan menampilkan batas galat yang terjamin, sehingga Anda dapat mengukur selisih timecode pada rekaman.",
 	settings: "Pengaturan",
 	timezone: "Zona waktu",
 	timezoneSearch: "Cari zona waktu",

@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — relógio de milissegundos para medir o desfasamento de vídeo",
-	description: "Um relógio com precisão de milissegundos para filmar com a sua câmara. Compara várias fontes de hora e mostra um limite de erro garantido, para medir o desfasamento do timecode nas suas gravações.",
 	settings: "Definições",
 	timezone: "Fuso horário",
 	timezoneSearch: "Procurar fuso horário",

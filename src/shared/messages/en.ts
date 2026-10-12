@@ -1,7 +1,4 @@
 const en = {
-	title: "{name} — millisecond clock for measuring video time drift",
-	description:
-		"A millisecond-accurate clock to film with your camera. It cross-checks several time sources and shows a guaranteed error bound, so you can measure timecode drift in your footage.",
 	settings: "Settings",
 	timezone: "Time zone",
 	timezoneSearch: "Search time zones",

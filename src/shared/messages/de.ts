@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — Millisekundenuhr zum Messen von Zeitversatz in Videos",
-	description: "Eine millisekundengenaue Uhr zum Abfilmen mit der Kamera. Sie gleicht mehrere Zeitquellen ab und zeigt eine garantierte Fehlergrenze, damit Sie den Timecode-Versatz Ihrer Aufnahmen messen können.",
 	settings: "Einstellungen",
 	timezone: "Zeitzone",
 	timezoneSearch: "Zeitzone suchen",

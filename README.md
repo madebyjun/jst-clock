@@ -11,6 +11,7 @@ pnpm typecheck
 pnpm test:e2e     # ビルド → プレビュー → E2E。結果は artifacts/e2e-report.md とスクショ、時刻コードは artifacts/timecode/（ffmpeg が必要）
 BASE_URL=https://… pnpm test:e2e   # デプロイ済みのURLに対して実行
 OFFLINE=1 pnpm test:e2e            # 実ネットワーク試験を飛ばす
+pnpm assets       # OG画像とファビコンのPNGを scripts/og.html・public/favicon.svg から作り直す（生成物はコミットする）
 pnpm run deploy   # cf deploy（手動）。その後 BASE_URL を付けて E2E を流し、本番の自前Workerを確かめる
 ```
 
@@ -36,11 +37,19 @@ node tools/decode-timecode.ts movie.mp4 --around 2026-10-13T00:00:00Z           
 
 CSV の列は `frame, pts, status, n, n_hi, frac, n_t, t_ms, t_iso, t28, t_est_ms, synced, verified, slewing, qr`。確定した時刻は `status` が `ok`（1枚だけ写っている）か `mixed`（2枚が混ざり、多く写った方）の行の `t_ms`（表示値、Unix ms）で、その値を描いたフレームの番号が `n_t`。`blend` は2枚の混ざりで番号 `n`〜`n_hi` と後の値の割合 `frac` だけ、`multi` は3枚以上の混ざりで何も返さない。`t_est_ms` は条件を満たすときだけの補間値で、確定値ではない。`qr` はその時点で最新のQRの中身。
 
+## 検索と共有
+
+- 各言語のページは Worker が JS なしで読める HTML を返す: タイトル・説明・canonical・hreflang（`/` が英語と x-default、`/en/` は `/` を正規とする）・OGP・Twitter カード・JSON-LD（WebSite / WebApplication / FAQPage）・時計の下の解説とFAQ
+- `/robots.txt` `/sitemap.xml` `/site.webmanifest` も Worker が返す。`/api/time` は `X-Robots-Tag: noindex`
+- 正規のオリジンは `cloudflare.config.ts` の `SITE_ORIGIN`。独自ドメインを付けたらそこに設定する（空ならリクエストのオリジン）
+- OG画像は言語共通の1枚（`public/og/card-<内容ハッシュ>.png`、1年キャッシュ）。タイトルと説明はカードの文字として各言語で出るので、画像には言語に依らない数字と製品名だけを置く
+
 ## ファイル
 
 - [docs/failure-modes.md](docs/failure-modes.md) 時刻がずれる・壊れる原因と、その対策・確認方法の一覧
 - `src/index.ts` `/api/time` を返し、`/` と `/{lang}/` の HTML を翻訳して返す Worker
-- `src/shared/` 製品名・対応言語・翻訳文（Worker とページで共有）
+- `src/shared/` 製品名・対応言語・翻訳文（Worker とページで共有）。`src/shared/seo/` は検索結果と解説の文言（Worker だけが使う）
+- `scripts/assets.ts` OG画像・ファビコンの生成
 - `src/client/settings.ts` 設定の保存と購読（`settings.get/set/subscribe/reset`）
 - `src/client/zone.ts` タイムゾーンの時刻計算
 - `src/client/sources.ts` 時刻源の定義

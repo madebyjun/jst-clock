@@ -1,9 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — 映像の時刻ずれを測るミリ秒時計",
-	description:
-		"カメラで撮影して使う、ミリ秒まで表示する時計。複数の時刻源を照合し、必ず収まる誤差上限を表示するので、映像のタイムコードのずれを測れます。",
 	settings: "設定",
 	timezone: "タイムゾーン",
 	timezoneSearch: "タイムゾーンを検索",

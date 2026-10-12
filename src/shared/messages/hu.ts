@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — ezredmásodperces óra a videó időeltérésének méréséhez",
-	description: "Ezredmásodperc pontosságú óra, amelyet a kamerával felvehet. Több időforrást vet össze, és garantált hibahatárt mutat, így megmérheti a felvételek időkódjának eltérését.",
 	settings: "Beállítások",
 	timezone: "Időzóna",
 	timezoneSearch: "Időzóna keresése",
