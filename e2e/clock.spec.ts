@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import { mockSources, type Offsets, save, setDelayAfterStamp, shot, waitRounds } from "./helpers.ts";
+import { mockSources, type Offsets, save, saveUnique, setDelayAfterStamp, shot, waitRounds } from "./helpers.ts";
 import { ntpReference } from "./ntp.ts";
 
 /** ページが推定した「正しい時刻 − システム時計(Date.now)」と、各時刻源の判定 */
@@ -47,6 +47,23 @@ test("1つだけ大きくずれた時刻源は除外され、推定に影響し�
 	await expect(page.locator('tr[data-source="akamai"] td').nth(1)).toHaveText("除外");
 	await shot(page, "falseticker");
 	save(`${test.info().project.name}-falseticker`, v);
+});
+
+test("狂った時刻源の側と正しい側で一致数が同点でも、表示する誤差上限の中に正しい時刻を入れる", async ({ page }) => {
+	// ローカルの実ネットワーク試験で起きた形を再現する: 自前Worker（システム時計、正しい時刻より40ms遅れ）が狭く狂い、
+	// timeapi・time.now は区間が広くて両方にまたがり、狭く正しいのは Akamai だけ（NICT は落ちている）。重なり数は 3対3 になる
+	const wide = { offset: 200, delayAfterStampMs: 150 };
+	await mockSources(page, { edge: 160, akamai: 200, nict: "down", timeapi: wide, timenow: wide });
+	await page.goto("/ja/");
+	await waitRounds(page, 3);
+	const v = await pageView(page);
+	const rate = await page.evaluate(() => (window.__clock.state() as { rate: { lo: number; hi: number } }).rate);
+	save(`${test.info().project.name}-tie`, { ...v, rate });
+	// Date.now の1ms分解能ぶんだけ許す
+	expect(Math.abs(v.offsetVsSystem! - 200)).toBeLessThanOrEqual(v.half! + 1);
+	// 同点の片側の点で学習すると、速さの範囲が真の速さ（0）を外しうる
+	expect(rate.lo).toBeLessThanOrEqual(0);
+	expect(rate.hi).toBeGreaterThanOrEqual(0);
 });
 
 test("外部の時刻源が全部落ちても自前のWorkerだけで表示し、照合できていないと警告する", async ({ page }) => {
@@ -109,6 +126,7 @@ test("実際の時刻源で同期した結果が、NTPで別に測った正し�
 	await waitRounds(page, 3);
 	const ntpBefore = await ntpReference();
 	const v = await pageView(page);
+	const diagAtView = await page.evaluate(() => ({ sys: Date.now(), state: window.__clock.state() }));
 	const inBound = await page.evaluate(async () => {
 		const xs: { shown: number; lo: number; hi: number }[] = [];
 		for (let i = 0; i < 40; i++) {
@@ -134,6 +152,8 @@ test("実際の時刻源で同期した結果が、NTPで別に測った正し�
 		pass: Math.abs(diff) <= bound,
 	};
 	save("real-network", report);
+	const diagAtEnd = await page.evaluate(() => ({ sys: Date.now(), state: window.__clock.state() }));
+	saveUnique("real-network-diag", { ...report, diagAtView, diagAtEnd });
 	expect(v.agreeing).toBeGreaterThanOrEqual(2);
 	for (const x of inBound) {
 		expect(x.shown).toBeGreaterThanOrEqual(x.lo);

@@ -2,7 +2,7 @@ import dgram from "node:dgram";
 
 const NTP_EPOCH_OFFSET = 2208988800;
 
-export type NtpResult = { server: string; offset: number; delay: number; half: number };
+export type NtpResult = { server: string; offset: number; delay: number; half: number; at: number };
 
 function readTs(buf: Buffer, at: number) {
 	return (buf.readUInt32BE(at) - NTP_EPOCH_OFFSET) * 1000 + (buf.readUInt32BE(at + 4) / 2 ** 32) * 1000;
@@ -26,7 +26,7 @@ function query(server: string, timeoutMs = 2000): Promise<NtpResult> {
 			const t3 = readTs(msg, 40);
 			const delay = t4 - t1 - (t3 - t2);
 			const offset = (t2 - t1 + (t3 - t4)) / 2;
-			resolve({ server, offset, delay, half: delay / 2 });
+			resolve({ server, offset, delay, half: delay / 2, at: t4 });
 		});
 		sock.on("error", (e) => {
 			clearTimeout(timer);

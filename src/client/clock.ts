@@ -31,6 +31,8 @@ export type Estimate = {
 	hi: number;
 	agreeing: number;
 	responding: number;
+	/** 重なり数が最大になる範囲。同点なら複数。lo〜hi はこれら全てを含む */
+	regions: { lo: number; hi: number }[];
 };
 
 /** 「正しい時刻 − 端末の時計」が1msあたり何ms変わるかの範囲。端末の時計が遅いと正 */
@@ -82,7 +84,11 @@ function estimateRate(points: RatePoint[], maxDrift: number): { rate: Rate; kept
 	};
 }
 
-// 区間の重なり数が最大になる範囲を探す（Marzullo法）
+/**
+ * 区間の重なり数が最大になる範囲を探す（Marzullo法）。最大になる範囲が複数あるときは、全てを含む最小の範囲を返す。
+ * 同点のうち1つだけを選ばないのは、どちらに真の時刻があるかは区間からは分からず、選び損ねると狭いまま真の時刻を含まない範囲を出すため。
+ * 「N−f 本以上が重なる範囲」の f を固定しないのは、狂った時刻源がないときまで常に範囲が広がり、精度を失うため
+ */
 function marzullo(iv: { lo: number; hi: number }[]) {
 	const ev = iv.flatMap((x) => [
 		{ v: x.lo, d: 1 },
@@ -91,17 +97,17 @@ function marzullo(iv: { lo: number; hi: number }[]) {
 	ev.sort((a, b) => a.v - b.v || b.d - a.d);
 	let n = 0;
 	let best = 0;
-	let lo = 0;
-	let hi = 0;
+	let regions: { lo: number; hi: number }[] = [];
 	for (let i = 0; i < ev.length; i++) {
 		n += ev[i].d;
 		if (n > best) {
 			best = n;
-			lo = ev[i].v;
-			hi = ev[i + 1].v;
+			regions = [{ lo: ev[i].v, hi: ev[i + 1].v }];
+		} else if (n === best && ev[i].d > 0) {
+			regions.push({ lo: ev[i].v, hi: ev[i + 1].v });
 		}
 	}
-	return { count: best, lo, hi };
+	return { count: best, lo: regions[0]?.lo ?? 0, hi: regions.at(-1)?.hi ?? 0, regions };
 }
 
 async function resourceEntry(url: string) {
@@ -264,6 +270,7 @@ export class Clock {
 			hi: m.hi,
 			agreeing: m.count,
 			responding: live.length,
+			regions: m.regions,
 		};
 	}
 
@@ -279,7 +286,8 @@ export class Clock {
 			const err = this.errors.get(src.id) ?? null;
 			let status: SourceState["status"] = "pending";
 			if (b && this.estimate) {
-				status = b.lo <= this.estimate.hi && b.hi >= this.estimate.lo ? "ok" : "falseticker";
+				// lo〜hi との重なりで判定しないのは、同点の候補の間の隙間にしか重ならない時刻源まで一致扱いになるため
+				status = this.estimate.regions.some((r) => b.lo <= r.hi && b.hi >= r.lo) ? "ok" : "falseticker";
 			} else if (err) status = "down";
 			return {
 				id: src.id,
@@ -292,6 +300,27 @@ export class Clock {
 				lastError: err,
 			};
 		});
+	}
+
+	/** 調査用に、推定の材料（時刻源ごとの全サンプル・速さの推定点・履歴）をそのまま返す */
+	debug(now = mono()) {
+		return {
+			now,
+			dateMinusMono: Date.now() - now,
+			rate: this.rate,
+			ratePoints: this.ratePoints,
+			estimate: this.estimate,
+			history: this.history,
+			sources: this.sources.map((src) => {
+				const b = this.best(src.id, now);
+				return {
+					id: src.id,
+					error: this.errors.get(src.id) ?? null,
+					best: b && { lo: b.lo, hi: b.hi, at: b.s.at, rtt: b.s.rtt, timed: b.s.timed },
+					samples: this.samples.get(src.id) ?? [],
+				};
+			}),
+		};
 	}
 
 	/** 補正後の時刻（Unix ms）。未同期なら null */

@@ -1,7 +1,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { type Page, test } from "@playwright/test";
 
-export type Offsets = Partial<Record<"edge" | "akamai" | "nict" | "timeapi" | "timenow", number | "down" | ((now: number) => number)>>;
+type Reply = number | ((now: number) => number);
+/** { offset, delayAfterStampMs } はその時刻源だけ応答を遅らせ、区間を広げる */
+export type Offsets = Partial<Record<"edge" | "akamai" | "nict" | "timeapi" | "timenow", Reply | "down" | { offset: Reply; delayAfterStampMs: number }>>;
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" };
 
@@ -19,8 +21,10 @@ export async function mockSources(page: Page, o: Offsets) {
 			if (d === undefined) return r.fallback();
 			if (d === "down") return r.abort("connectionrefused");
 			const now = Date.now();
-			if (delayAfterStamp) await new Promise((res) => setTimeout(res, delayAfterStamp));
-			return r.fulfill({ status: 200, headers: CORS, contentType: type, body: body(typeof d === "function" ? d(now) : now + d) });
+			const reply = typeof d === "object" ? d.offset : d;
+			const wait = typeof d === "object" ? d.delayAfterStampMs : delayAfterStamp;
+			if (wait) await new Promise((res) => setTimeout(res, wait));
+			return r.fulfill({ status: 200, headers: CORS, contentType: type, body: body(typeof reply === "function" ? reply(now) : now + reply) });
 		});
 	};
 	const json = "application/json";
@@ -38,6 +42,13 @@ export async function waitRounds(page: Page, n: number) {
 export function save(name: string, data: unknown) {
 	mkdirSync("artifacts/results", { recursive: true });
 	writeFileSync(`artifacts/results/${name}.json`, JSON.stringify(data, null, 2));
+}
+
+/** 実行ごとに上書きせず残す。不定期にしか起きない失敗を、起きた回の材料で調べるため */
+export function saveUnique(dir: string, data: unknown) {
+	mkdirSync(`artifacts/results/${dir}`, { recursive: true });
+	const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+	writeFileSync(`artifacts/results/${dir}/${stamp}-${process.pid}.json`, JSON.stringify(data, null, 2));
 }
 
 export async function shot(page: Page, name: string) {

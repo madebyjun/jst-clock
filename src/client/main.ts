@@ -83,6 +83,7 @@ window.__clock = {
 		lastRoundOk: clock.lastRoundOk,
 		history: clock.history.length,
 		suspends,
+		debug: clock.debug(),
 	}),
 	sync: () => clock.round(),
 };
