@@ -1,15 +1,42 @@
 import { Clock, mono } from "./clock.ts";
+import { setupControls } from "./controls.ts";
+import { applyStatic, lang, msg, redirecting } from "./i18n.ts";
+import { settings } from "./settings.ts";
 import { SOURCES } from "./sources.ts";
 import { drawHistory, drawIntervals } from "./viz.ts";
+import { Zone } from "./zone.ts";
 
 const params = new URLSearchParams(location.search);
 // interval と maxdrift はE2Eで速さの推定を短時間で確かめるためのもの
 const ROUND_INTERVAL_MS = Number(params.get("interval")) || 30_000;
 const BURST_ROUNDS = 3;
 const SUSPEND_GAP_MS = 1000;
-const JST_MS = 9 * 3600_000;
 
-const extraLag = Number(params.get("lag") ?? 0) || 0;
+let extraLag = settings.get("lag");
+let zone = new Zone(settings.get("tz"), lang);
+let vizShown = settings.get("details");
+let animate = settings.get("animation");
+function applyDetails() {
+	vizShown = settings.get("details");
+	document.body.classList.toggle("min", !vizShown);
+}
+function applyAnimation() {
+	animate = settings.get("animation");
+	document.documentElement.dataset.animation = animate ? "on" : "off";
+}
+settings.subscribe("lag", (v) => {
+	extraLag = v;
+	renderStatus();
+});
+settings.subscribe("tz", (v) => {
+	zone = new Zone(v, lang);
+});
+settings.subscribe("details", applyDetails);
+settings.subscribe("animation", applyAnimation);
+applyStatic();
+applyDetails();
+applyAnimation();
+setupControls();
 
 const clock = new Clock(SOURCES, (Number(params.get("maxdrift")) || 100) * 1e-6);
 const $ = (id: string) => document.getElementById(id)!;
@@ -56,8 +83,8 @@ window.__clock = {
 
 let frameMs = 1000 / 60;
 let lastViz = 0;
-const vizHidden = params.has("min");
 let prevTs = 0;
+let dateKey = "";
 
 function frame(ts: number) {
 	if (prevTs) {
@@ -68,19 +95,30 @@ function frame(ts: number) {
 	// rAF の時刻を描くと画面に出る頃には1フレーム古いので、次のフレームが表示される時刻を描く
 	const t = clock.now(performance.timeOrigin + ts + frameMs + extraLag);
 	if (t !== null) {
-		const jst = new Date(t + JST_MS);
-		const ms = jst.getUTCMilliseconds();
-		setTime(`${pad(jst.getUTCHours())}:${pad(jst.getUTCMinutes())}:${pad(jst.getUTCSeconds())}.${pad(ms, 3)}`);
-		$("date").textContent = `${jst.getUTCFullYear()}-${pad(jst.getUTCMonth() + 1)}-${pad(jst.getUTCDate())} JST`;
+		const local = new Date(t + zone.offsetAt(t));
+		const ms = local.getUTCMilliseconds();
+		setTime(`${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}:${pad(local.getUTCSeconds())}.${pad(ms, 3)}`);
+		renderDate(t);
 		$("fill").style.transform = `scaleX(${ms / 1000})`;
 	}
 	document.body.dataset.synced = String(t !== null);
-	if (!vizHidden && ts - lastViz > 100) {
+	if (vizShown && ts - lastViz > 100) {
 		lastViz = ts;
-		drawIntervals($("viz-intervals") as HTMLCanvasElement, clock);
+		drawIntervals($("viz-intervals") as HTMLCanvasElement, clock, animate);
 		drawHistory($("viz-history") as HTMLCanvasElement, clock);
 	}
 	requestAnimationFrame(frame);
+}
+
+function renderDate(t: number) {
+	const d = zone.dateLine(t);
+	const key = `${zone.id}|${d.day}|${d.name}|${d.offset}`;
+	if (key === dateKey) return;
+	dateKey = key;
+	$("date-day").textContent = d.day;
+	$("date-zone").textContent = d.name;
+	$("date-offset").textContent = d.offset;
+	document.body.dataset.tz = zone.id;
 }
 
 function renderStatus() {
@@ -90,7 +128,7 @@ function renderStatus() {
 	const dot = $("dot");
 	if (!e) {
 		dot.dataset.level = clock.rounds > 0 ? "bad" : "wait";
-		$("state").textContent = clock.rounds > 0 ? "どの時刻源にも接続できません" : "時刻源に問い合わせ中";
+		$("state").textContent = msg(clock.rounds > 0 ? "noSource" : "querying");
 		$("unc").textContent = "-";
 		$("dev").textContent = "-";
 	} else {
@@ -100,10 +138,10 @@ function renderStatus() {
 		const holdover = clock.lastRoundOk === 0;
 		dot.dataset.level = majority && verified && !holdover ? "ok" : "warn";
 		$("state").textContent = holdover
-			? "時刻源に接続できず、端末の時計の速さから推定中"
+			? msg("holdover")
 			: !verified
-				? `時刻源が${e.agreeing}つだけで、照合できていません`
-				: `${e.responding}つ中${e.agreeing}つの時刻源が一致`;
+				? msg("unverified")
+				: msg("agreeing", { a: e.agreeing, r: e.responding });
 		$("unc").textContent = `${fmtPm(half)} ms`;
 		$("dev").textContent = fmtMs(Date.now() - (mono() + e.offset));
 	}
@@ -111,8 +149,8 @@ function renderStatus() {
 	const learned = r.points >= 2 && r.hi - r.lo < 150e-6;
 	// 端末の時計の速さは「正しい時刻 − 端末の時計」の増え方の符号を反転したもの
 	$("rate").textContent = learned
-		? `${fmtPpm(-(r.lo + r.hi) / 2)}（±${((r.hi - r.lo) / 2 * 1e6).toFixed(1)}）`
-		: "推定中";
+		? `${fmtPpm(-(r.lo + r.hi) / 2)} (±${((r.hi - r.lo) / 2 * 1e6).toFixed(1)})`
+		: msg("estimating");
 	$("frame").textContent = `${fig(frameMs.toFixed(1), 4)} ms${extraLag ? ` + ${extraLag} ms` : ""}`;
 
 	const rows = $("rows");
@@ -124,16 +162,22 @@ function renderStatus() {
 			const mid = s.lo !== null && s.hi !== null && e ? (s.lo + s.hi) / 2 - e.offset : null;
 			const cells = [
 				s.label,
-				{ pending: "待機中", ok: "一致", falseticker: "除外", down: "応答なし" }[s.status],
+				msg(s.status),
 				mid === null ? "-" : fmtMs(mid),
 				s.lo === null || s.hi === null ? "-" : fmtPm((s.hi - s.lo) / 2),
 				s.rtt === null ? "-" : `${fig(s.rtt.toFixed(1), 6)}${s.timed ? "\u2007" : "*"}`,
 			];
-			for (const c of cells) {
+			cells.forEach((c, i) => {
 				const td = document.createElement("td");
-				td.textContent = c;
+				if (i >= 2) {
+					// セルごと direction: ltr にしないのは、右から左の言語で見出しと揃え（text-align: end）がずれるため
+					const n = document.createElement("bdi");
+					n.dir = "ltr";
+					n.textContent = c;
+					td.append(n);
+				} else td.textContent = c;
 				tr.append(td);
-			}
+			});
 			return tr;
 		}),
 	);
@@ -146,7 +190,7 @@ async function keepAwake() {
 	} catch {
 		wakeLock = null;
 	}
-	$("wake").textContent = wakeLock ? "画面スリープ防止中" : "画面スリープ防止が使えません";
+	$("wake").textContent = msg(wakeLock ? "wakeOn" : "wakeOff");
 }
 
 let suspends = 0;
@@ -195,9 +239,11 @@ for (let i = 1; i < 10; i++) {
 	tick.style.left = `${i * 10}%`;
 	$("bar").append(tick);
 }
-setInterval(() => {
-	checkSuspend();
-	renderStatus();
-}, 500);
-requestAnimationFrame(frame);
-start();
+if (!redirecting) {
+	setInterval(() => {
+		checkSuspend();
+		renderStatus();
+	}, 500);
+	requestAnimationFrame(frame);
+	start();
+}

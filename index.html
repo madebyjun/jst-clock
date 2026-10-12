@@ -1,10 +1,11 @@
 <!doctype html>
-<html lang="ja">
+<html lang="en" dir="ltr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title>JST Clock</title>
+<title data-i18n="title"></title>
+<meta name="description" data-i18n-content="description">
 <style>
 	/* 撮影用の黒地。照明の映り込みを減らすため単一の暗い配色で固定 */
 	:root {
@@ -24,8 +25,21 @@
 		display: grid; place-items: center; padding-inline: 16px; box-sizing: border-box;
 		padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
 	}
-	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); }
-	#date { color: var(--dim); font-size: clamp(14px, 2.2vw, 30px); letter-spacing: .08em; }
+	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); min-width: 0; padding-block: 12px; }
+	header { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; font-size: 13px; color: var(--dim); }
+	header input, header select, header button, dialog input, dialog button {
+		font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 4px 8px; min-height: 32px; box-sizing: border-box;
+	}
+	header input { width: 15em; max-width: 100%; }
+	header select { max-width: 12em; }
+	header label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+	#open-settings { display: inline-grid; place-items: center; width: 32px; padding: 0; cursor: pointer; }
+	#open-settings svg { width: 18px; height: 18px; }
+	:is(input, select, button):focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
+	.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+	#date { color: var(--dim); font-size: clamp(14px, 2.2vw, 30px); letter-spacing: .08em; display: flex; flex-wrap: wrap; gap: 0 1em; }
+	/* 右から左の言語でも反転させないのは、撮影した映像で桁の並びと位置が言語によって変わると読み取れなくなるため */
+	#time, #bar, .num { direction: ltr; unicode-bidi: isolate; }
 	#time { font-size: clamp(38px, 11.6vw, 196px); line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; }
 	#time .d { width: .62em; }
 	#time .d, #time .s { display: inline-flex; justify-content: center; overflow: visible; }
@@ -37,14 +51,14 @@
 	#bar i { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--bg); }
 	.status { display: flex; flex-wrap: wrap; gap: .4em 1.8em; color: var(--dim); font-size: clamp(12px, 1.35vw, 18px); }
 	.status b { font-weight: 400; color: var(--fg); }
-	#dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .45em; background: var(--dim); }
+	#dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-inline-end: .45em; background: var(--dim); }
 	#dot[data-level="ok"] { background: var(--ok); }
 	#dot[data-level="warn"] { background: var(--warn); }
 	#dot[data-level="bad"] { background: var(--bad); }
 	.table { overflow-x: auto; }
 	table { border-collapse: collapse; font-size: clamp(11px, 1.15vw, 15px); color: var(--dim); font-variant-numeric: tabular-nums; }
-	th, td { text-align: right; padding: .25em 1.2em .25em 0; white-space: nowrap; }
-	th:first-child, td:first-child { text-align: left; }
+	th, td { text-align: end; padding-block: .25em; padding-inline: 0 1.2em; white-space: nowrap; }
+	th:first-child, td:first-child { text-align: start; }
 	th { font-weight: 400; border-bottom: 1px solid var(--rule); }
 	tr[data-status="ok"] td:nth-child(2) { color: var(--ok); }
 	tr[data-status="falseticker"] td:nth-child(2), tr[data-status="down"] td:nth-child(2) { color: var(--bad); }
@@ -52,34 +66,65 @@
 	.viz canvas { width: 100%; height: clamp(150px, 18vw, 230px); display: block; }
 	@media (max-width: 720px) { .viz { grid-template-columns: 1fr; } }
 	.note { color: var(--dim); font-size: clamp(10px, 1vw, 13px); }
+	.note code { unicode-bidi: isolate; direction: ltr; }
 	body.min .table, body.min .note, body.min .viz { display: none; }
+	dialog { background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: 8px; padding: 20px; width: min(28em, calc(100vw - 32px)); box-sizing: border-box; font-size: 14px; }
+	dialog::backdrop { background: rgb(0 0 0 / .7); }
+	dialog h2 { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
+	dialog .opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--rule); cursor: pointer; }
+	dialog .opt small { display: block; color: var(--dim); margin-top: 2px; }
+	dialog input[type="checkbox"] { width: 20px; height: 20px; min-height: 0; accent-color: var(--ok); flex: none; }
+	dialog input[type="number"] { width: 6em; text-align: end; flex: none; }
+	dialog .actions { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+	dialog button { cursor: pointer; padding-inline: 14px; }
+	dialog .hint { color: var(--dim); font-size: 12px; margin: 10px 0 0; }
 </style>
 </head>
 <body data-synced="false">
 <main>
-	<div id="date">----/--/-- JST</div>
+	<header>
+		<label><span class="vh" data-i18n="timezone"></span><svg aria-hidden="true" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg><input id="tz" type="text" list="tz-list" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="done" dir="ltr" data-i18n-placeholder="timezoneSearch"></label>
+		<datalist id="tz-list"></datalist>
+		<label><span class="vh" data-i18n="language"></span><select id="lang"></select></label>
+		<button id="open-settings" type="button" aria-haspopup="dialog" data-i18n-label="settings"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+	</header>
+	<div id="date"><span id="date-day">-</span><span id="date-zone"></span><span id="date-offset" class="num"></span></div>
 	<div id="time" aria-live="off"></div>
 	<div id="bar"><div id="fill"></div></div>
 	<div class="status">
-		<span><span id="dot" data-level="wait"></span><b id="state">時刻源に問い合わせ中</b></span>
-		<span>誤差上限 <b id="unc">-</b></span>
-		<span>この端末の時計 <b id="dev">-</b></span>
-		<span>端末の時計の速さ <b id="rate">推定中</b></span>
-		<span>描画補正 <b id="frame">-</b></span>
+		<span><span id="dot" data-level="wait"></span><b id="state" data-i18n="querying"></b></span>
+		<span><span data-i18n="errorBound"></span> <b id="unc" class="num">-</b></span>
+		<span><span data-i18n="deviceClock"></span> <b id="dev" class="num">-</b></span>
+		<span><span data-i18n="deviceRate"></span> <b id="rate" class="num"></b></span>
+		<span><span data-i18n="renderComp"></span> <b id="frame" class="num">-</b></span>
 		<span id="wake"></span>
 	</div>
 	<div class="viz">
-		<canvas id="viz-intervals" aria-label="時刻源ごとの区間と合議の範囲"></canvas>
-		<canvas id="viz-history" aria-label="合議の範囲の推移"></canvas>
+		<canvas id="viz-intervals" dir="ltr" data-i18n-label="vizIntervals"></canvas>
+		<canvas id="viz-history" dir="ltr" data-i18n-label="vizHistory"></canvas>
 	</div>
 	<div class="table">
 		<table>
-			<thead><tr><th>時刻源</th><th>状態</th><th>合議値との差</th><th>誤差上限 (ms)</th><th>往復 (ms)</th></tr></thead>
+			<thead><tr><th data-i18n="colSource"></th><th data-i18n="colStatus"></th><th data-i18n="colOffset"></th><th data-i18n="colBound"></th><th data-i18n="colRtt"></th></tr></thead>
 			<tbody id="rows"></tbody>
 		</table>
 	</div>
-	<p class="note">誤差上限は「正しい時刻が必ずこの範囲に入る」幅で、各時刻源への往復時間から求めた値。往復の * は接続確立を含む測定（Resource Timing が使えない時刻源）。グラフの横棒が各時刻源の区間、緑の帯がすべての一致した区間の共通部分で、その中央を時刻として表示している。<code>?min</code> で時計だけ、<code>?lag=ms</code> で表示遅れを手動補正。</p>
+	<p class="note"><span data-i18n="note"></span> <span data-i18n="urlOptions"></span> <code>?min</code> <code>?lag=ms</code> <code>?tz=Area/City</code></p>
 </main>
+<dialog id="settings" aria-labelledby="settings-title">
+	<form method="dialog">
+		<h2 id="settings-title" data-i18n="settings"></h2>
+		<label class="opt"><span><span data-i18n="animation"></span><small data-i18n="animationHint"></small></span><input type="checkbox" name="animation"></label>
+		<label class="opt"><span><span data-i18n="code"></span><small data-i18n="codeHint"></small></span><input type="checkbox" name="code"></label>
+		<label class="opt"><span data-i18n="details"></span><input type="checkbox" name="details"></label>
+		<label class="opt"><span><span data-i18n="lag"></span><small data-i18n="lagHint"></small></span><input type="number" name="lag" step="1" min="-1000" max="1000" inputmode="decimal" dir="ltr"></label>
+		<div class="actions">
+			<button type="button" id="reset" data-i18n="reset"></button>
+			<button value="close" data-i18n="close"></button>
+		</div>
+		<p class="hint" data-i18n="resetHint"></p>
+	</form>
+</dialog>
 <script>if (new URLSearchParams(location.search).has("min")) document.body.classList.add("min");</script>
 <script type="module" src="/src/client/main.ts"></script>
 </body>

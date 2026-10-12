@@ -1,4 +1,5 @@
 import { type Clock, mono } from "./clock.ts";
+import { msg } from "./i18n.ts";
 
 const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
@@ -26,7 +27,7 @@ function niceStep(span: number, target: number) {
 const fmtTick = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(v) < 10 && v % 1 ? Math.abs(v).toFixed(1) : Math.abs(v).toFixed(0)}`;
 
 /** 時刻源ごとの「真の時刻が入る区間」を、合議値を0とした軸に並べる */
-export function drawIntervals(canvas: HTMLCanvasElement, clock: Clock) {
+export function drawIntervals(canvas: HTMLCanvasElement, clock: Clock, animate: boolean) {
 	const { g, w, h } = setup(canvas);
 	const e = clock.estimate;
 	const states = clock.sourceStates();
@@ -35,7 +36,7 @@ export function drawIntervals(canvas: HTMLCanvasElement, clock: Clock) {
 	const C = { fg: css("--fg"), dim: css("--dim"), rule: css("--rule"), ok: css("--ok"), bad: css("--bad"), warn: css("--warn") };
 
 	g.font = `11px ${font}`;
-	const labelW = Math.max(...[...states.map((s) => s.label), "この端末の時計"].map((t) => g.measureText(t).width)) + 14;
+	const labelW = Math.max(...[...states.map((s) => s.label), msg("deviceClock")].map((t) => g.measureText(t).width)) + 14;
 	const top = 22;
 	const bottom = 26;
 	const rowH = (h - top - bottom) / Math.max(states.length + 1, 1);
@@ -47,7 +48,7 @@ export function drawIntervals(canvas: HTMLCanvasElement, clock: Clock) {
 
 	if (!e) {
 		g.fillStyle = C.dim;
-		g.fillText("時刻源の応答を待っています", x0, h / 2);
+		g.fillText(msg("waitingSources"), x0, h / 2);
 		return;
 	}
 
@@ -78,7 +79,7 @@ export function drawIntervals(canvas: HTMLCanvasElement, clock: Clock) {
 		g.fillText(`${fmtTick(v)}`, x, h - bottom + 14);
 	}
 	g.textAlign = "left";
-	g.fillText("合議値からの差 (ms)", x0, 9);
+	g.fillText(msg("axisOffset"), x0, 9);
 
 	// 合議の範囲（全ての一致した区間の共通部分）
 	g.fillStyle = C.ok;
@@ -102,7 +103,7 @@ export function drawIntervals(canvas: HTMLCanvasElement, clock: Clock) {
 			const dev = Date.now() - now;
 			const x = X(dev);
 			g.fillStyle = C.dim;
-			g.fillText("この端末の時計", 0, y);
+			g.fillText(msg("deviceClock"), 0, y);
 			g.fillStyle = C.warn;
 			const cx = clampX(x);
 			g.beginPath();
@@ -126,7 +127,7 @@ export function drawIntervals(canvas: HTMLCanvasElement, clock: Clock) {
 		}
 		const s = r.s;
 		const color = s.status === "ok" ? C.fg : s.status === "pending" ? C.dim : C.bad;
-		const pulse = Math.max(0, 1 - (now - (clock.lastSampleAt.get(s.id) ?? -1e9)) / 600);
+		const pulse = animate ? Math.max(0, 1 - (now - (clock.lastSampleAt.get(s.id) ?? -1e9)) / 600) : 0;
 		if (pulse > 0) {
 			g.fillStyle = C.fg;
 			g.globalAlpha = 0.08 * pulse;
@@ -148,7 +149,7 @@ export function drawIntervals(canvas: HTMLCanvasElement, clock: Clock) {
 		g.globalAlpha = 1;
 		if (s.lo === null || s.hi === null) {
 			g.fillStyle = C.dim;
-			g.fillText(s.status === "down" ? "応答なし" : "…", x0 + 4, y);
+			g.fillText(s.status === "down" ? msg("down") : "…", x0 + 4, y);
 			return;
 		}
 		const l = X(s.lo);
@@ -181,7 +182,7 @@ export function drawHistory(canvas: HTMLCanvasElement, clock: Clock) {
 	const e = clock.estimate;
 	if (!e || hist.length < 2) {
 		g.fillStyle = C.dim;
-		g.fillText("履歴を集めています", 0, h / 2);
+		g.fillText(msg("collecting"), 0, h / 2);
 		return;
 	}
 	const now = mono();
@@ -209,9 +210,9 @@ export function drawHistory(canvas: HTMLCanvasElement, clock: Clock) {
 		g.fillText(fmtTick(v), left - 6, Y(ref + v));
 	}
 	g.textAlign = "left";
-	g.fillText("合議の範囲の推移 (ms, 現在値基準)", left, 7);
+	g.fillText(msg("historyTitle"), left, 7);
 	g.textAlign = "right";
-	g.fillText(`${Math.round(tSpan / 1000)} 秒`, w - 8, h - 8);
+	g.fillText(msg("seconds", { n: Math.round(tSpan / 1000) }), w - 8, h - 8);
 	g.textAlign = "left";
 
 	g.fillStyle = C.ok;
@@ -231,7 +232,7 @@ export function drawHistory(canvas: HTMLCanvasElement, clock: Clock) {
 	if (r.points >= 2 && r.hi - r.lo < 150e-6) {
 		g.fillStyle = C.fg;
 		g.textAlign = "right";
-		g.fillText(`速さの推定: ${r.points}点 / ${Math.round(r.spanMs / 60000)}分`, w - 8, 7);
+		g.fillText(msg("rateEstimate", { n: r.points, m: Math.round(r.spanMs / 60000) }), w - 8, 7);
 		g.textAlign = "left";
 	}
 }
