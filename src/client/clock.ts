@@ -301,6 +301,16 @@ export class Clock {
 		return { lo: this.estimate.lo + this.rate.lo * dt, hi: this.estimate.hi + this.rate.hi * dt };
 	}
 
+	/**
+	 * 表示しているオフセットの最大誤差。正しい値は bounds の中のどこにでもありうるので、表示値から遠い側の端までの距離。
+	 * 区間の半幅にしないのは、表示値を端へ切り詰めた直後は反対側の端までの距離が半幅を超えるため
+	 */
+	shownError(at = mono()) {
+		const b = this.bounds(at);
+		if (!b || this.displayOffset === null) return null;
+		return Math.max(this.displayOffset - b.lo, b.hi - this.displayOffset);
+	}
+
 	/** 表示に使っているオフセット。未同期なら null */
 	shownOffset() {
 		return this.displayOffset;

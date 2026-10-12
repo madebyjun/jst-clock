@@ -6,14 +6,18 @@ type Offsets = Partial<Record<"edge" | "akamai" | "nict" | "timeapi" | "timenow"
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" };
 
+/** delayAfterStamp: 時刻を決めてから応答するまでの待ち。往復の非対称を作るため */
+let delayAfterStamp = 0;
+
 /** 各時刻源を「このマシンの時計 + 指定ms」を返すよう差し替える。"down" は接続失敗、関数なら任意の時刻。o は後から書き換えられる */
 async function mockSources(page: Page, o: Offsets) {
 	const route = async (pattern: string, key: keyof Offsets, body: (t: number) => string, type: string) => {
-		await page.route(pattern, (r) => {
+		await page.route(pattern, async (r) => {
 			const d = o[key];
 			if (d === undefined) return r.fallback();
 			if (d === "down") return r.abort("connectionrefused");
 			const now = Date.now();
+			if (delayAfterStamp) await new Promise((res) => setTimeout(res, delayAfterStamp));
 			return r.fulfill({ status: 200, headers: CORS, contentType: type, body: body(typeof d === "function" ? d(now) : now + d) });
 		});
 	};
@@ -33,13 +37,14 @@ async function waitRounds(page: Page, n: number) {
 async function pageView(page: Page) {
 	return page.evaluate(() => {
 		const st = window.__clock.state() as {
+			shownError: number | null;
 			estimate: { lo: number; hi: number; agreeing: number; responding: number } | null;
 			sources: { id: string; status: string }[];
 		};
 		const now = window.__clock.now();
 		return {
 			offsetVsSystem: now === null ? null : now - Date.now(),
-			half: st.estimate ? (st.estimate.hi - st.estimate.lo) / 2 : null,
+			half: st.shownError,
 			agreeing: st.estimate?.agreeing ?? 0,
 			responding: st.estimate?.responding ?? 0,
 			status: Object.fromEntries(st.sources.map((s) => [s.id, s.status])),
@@ -197,7 +202,7 @@ test("端末の時計の速さを学習し、時刻源が全部落ちてもそ�
 	await expect(page.locator("#state")).toHaveText("時刻源に接続できず、端末の時計の速さから推定中");
 	const v = await page.evaluate(() => {
 		const st = window.__clock.state() as { estimate: { lo: number; hi: number } };
-		return { now: window.__clock.now()!, sys: Date.now(), half: (st.estimate.hi - st.estimate.lo) / 2 };
+		return { now: window.__clock.now()!, sys: Date.now(), half: (st as unknown as { shownError: number }).shownError };
 	});
 	const err = v.now - truth(v.sys);
 	// 速さを学習していなければ 5000ppm × 10秒 = 50ms ずれる
@@ -276,4 +281,33 @@ test("スリープから戻ったときだけリセットし、数秒以内に�
 	await expect(page.locator("#dot")).toHaveAttribute("data-level", "ok");
 	await shot(page, "suspend-return");
 	save(`${test.info().project.name}-suspend-return`, { before, atShow, after, refillMs });
+});
+
+test("再同期で区間が狭まった直後も、実際のずれは画面の誤差上限を超えない", async ({ page }) => {
+	test.setTimeout(60_000);
+	delayAfterStamp = 50;
+	try {
+		await mockSources(page, { edge: 200, akamai: 200, nict: "down", timeapi: "down", timenow: "down" });
+		await page.goto("/");
+		await waitRounds(page, 3);
+		delayAfterStamp = 20;
+		const worst = await page.evaluate(async () => {
+			await window.__clock.sync();
+			let worst = { excess: Number.NEGATIVE_INFINITY, err: 0, shown: 0 };
+			for (let i = 0; i < 60; i++) {
+				const now = window.__clock.now()!;
+				const sys = Date.now();
+				const shown = (window.__clock.state() as { shownError: number }).shownError;
+				const err = Math.abs(now - (sys + 200));
+				if (err - shown > worst.excess) worst = { excess: err - shown, err, shown };
+				await new Promise((r) => setTimeout(r, 50));
+			}
+			return worst;
+		});
+		save(`${test.info().project.name}-resync-bound`, worst);
+		// Date.now の1ms分解能ぶんだけ許す
+		expect(worst.excess).toBeLessThanOrEqual(1);
+	} finally {
+		delayAfterStamp = 0;
+	}
 });
