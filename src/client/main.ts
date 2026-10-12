@@ -1,3 +1,4 @@
+import { startBackground } from "./bg.ts";
 import { Clock, mono } from "./clock.ts";
 import { SOURCES } from "./sources.ts";
 import { drawHistory, drawIntervals } from "./viz.ts";
@@ -162,3 +163,4 @@ for (let i = 1; i < 10; i++) {
 setInterval(renderStatus, 500);
 requestAnimationFrame(frame);
 start();
+startBackground();
