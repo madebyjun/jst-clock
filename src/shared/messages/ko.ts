@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — 영상의 시간 오차를 재는 밀리초 시계",
-	description: "카메라로 촬영해서 쓰는 밀리초 단위 시계입니다. 여러 시간 소스를 교차 확인하고 반드시 지켜지는 오차 상한을 보여 주므로, 영상 타임코드의 어긋남을 잴 수 있습니다.",
 	settings: "설정",
 	timezone: "시간대",
 	timezoneSearch: "시간대 검색",

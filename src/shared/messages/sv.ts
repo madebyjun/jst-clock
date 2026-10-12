@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — millisekundklocka för att mäta tidsavvikelse i video",
-	description: "En millisekundnoggrann klocka att filma med kameran. Den jämför flera tidskällor och visar en garanterad felgräns, så att du kan mäta tidskodens avvikelse i dina inspelningar.",
 	settings: "Inställningar",
 	timezone: "Tidszon",
 	timezoneSearch: "Sök tidszon",

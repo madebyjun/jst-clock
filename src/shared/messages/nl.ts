@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — millisecondeklok om tijdsafwijking in video te meten",
-	description: "Een klok tot op de milliseconde nauwkeurig om met je camera te filmen. Hij vergelijkt meerdere tijdbronnen en toont een gegarandeerde foutmarge, zodat je de timecode-afwijking in je opnamen kunt meten.",
 	settings: "Instellingen",
 	timezone: "Tijdzone",
 	timezoneSearch: "Tijdzone zoeken",

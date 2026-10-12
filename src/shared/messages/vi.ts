@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — đồng hồ mili giây để đo độ lệch thời gian của video",
-	description: "Đồng hồ chính xác đến mili giây để quay bằng máy quay. Nó đối chiếu nhiều nguồn thời gian và hiển thị giới hạn sai số được bảo đảm, giúp bạn đo độ lệch timecode trong bản ghi.",
 	settings: "Cài đặt",
 	timezone: "Múi giờ",
 	timezoneSearch: "Tìm múi giờ",

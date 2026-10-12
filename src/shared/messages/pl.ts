@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — zegar milisekundowy do pomiaru przesunięcia czasu w wideo",
-	description: "Zegar z dokładnością do milisekundy do filmowania kamerą. Porównuje kilka źródeł czasu i pokazuje gwarantowaną granicę błędu, dzięki czemu zmierzysz przesunięcie kodu czasowego w nagraniu.",
 	settings: "Ustawienia",
 	timezone: "Strefa czasowa",
 	timezoneSearch: "Szukaj strefy czasowej",

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+	:root { --bg: #050607; --fg: #eef2f5; --dim: #66717c; --rule: #1a2026; --ok: #46c98a; --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace; }
+	html, body { margin: 0; }
+	body { width: 1200px; height: 630px; box-sizing: border-box; padding: 64px 72px 60px; background: var(--bg); color: var(--fg); font-family: var(--mono); display: grid; grid-template-rows: auto 1fr auto; grid-template-columns: minmax(0, 1fr); overflow: hidden; }
+	.top { display: flex; justify-content: space-between; align-items: center; color: var(--dim); font-size: 30px; letter-spacing: .06em; }
+	.dot { display: inline-block; width: 22px; height: 22px; border-radius: 50%; background: var(--ok); margin-inline-end: 14px; vertical-align: -2px; }
+	.time { align-self: center; font-size: 142px; line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+	.time .ms { opacity: .8; }
+	.bar { height: 30px; border: 3px solid var(--rule); position: relative; margin-bottom: 36px; }
+	.bar::before { content: ""; position: absolute; inset: 0; width: 78.9%; background: var(--fg); }
+	.bottom { display: flex; justify-content: space-between; align-items: baseline; }
+	.name { font-size: 64px; font-weight: 600; letter-spacing: -.01em; }
+	.bound { font-size: 40px; color: var(--dim); }
+	.bound b { color: var(--fg); font-weight: 400; }
+</style>
+</head>
+<body>
+	<div class="top"><span>2026-10-13 UTC</span><span><span class="dot"></span>5/5</span></div>
+	<div class="time">12:34:56<span class="ms">.789</span></div>
+	<div>
+		<div class="bar"></div>
+		<div class="bottom"><span class="name">{name}</span><span class="bound">± <b>1.8</b> ms</span></div>
+	</div>
+</body>
+</html>

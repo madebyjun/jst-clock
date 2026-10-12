@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — orologio al millisecondo per misurare lo sfasamento video",
-	description: "Un orologio preciso al millisecondo da riprendere con la videocamera. Confronta più fonti orarie e mostra un margine d'errore garantito, così puoi misurare lo sfasamento del timecode nelle tue riprese.",
 	settings: "Impostazioni",
 	timezone: "Fuso orario",
 	timezoneSearch: "Cerca fuso orario",

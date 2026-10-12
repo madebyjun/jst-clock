@@ -4,8 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<title data-i18n="title"></title>
-<meta name="description" data-i18n-content="description">
+<title data-seo="title"></title>
+<meta name="description" data-seo-content="description">
+<meta name="theme-color" content="#050607">
+<link rel="icon" href="/favicon.ico" sizes="32x32">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
 <style>
 	/* 撮影用の黒地。照明の映り込みを減らすため単一の暗い配色で固定 */
 	:root {
@@ -19,13 +24,13 @@
 		--mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 		color-scheme: dark;
 	}
-	html, body { height: 100%; margin: 0; }
+	html, body { min-height: 100%; margin: 0; }
 	body {
 		background: var(--bg); color: var(--fg); font-family: var(--mono);
 		display: grid; place-items: center; padding-inline: 16px; box-sizing: border-box;
 		padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
 	}
-	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); min-width: 0; padding-block: 12px; }
+	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); min-width: 0; padding-block: 12px; min-height: 100svh; box-sizing: border-box; align-content: start; }
 	header { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; font-size: 13px; color: var(--dim); }
 	header input, header select, header button, dialog input, dialog button {
 		font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 4px 8px; min-height: 32px; box-sizing: border-box;
@@ -40,7 +45,7 @@
 	#date { color: var(--dim); font-size: clamp(14px, 2.2vw, 30px); letter-spacing: .08em; display: flex; flex-wrap: wrap; gap: 0 1em; }
 	/* 右から左の言語でも反転させないのは、撮影した映像で桁の並びと位置が言語によって変わると読み取れなくなるため */
 	#time, #bar, .num { direction: ltr; unicode-bidi: isolate; }
-	#time { font-size: clamp(38px, 11.6vw, 196px); line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; }
+	#time { font-size: clamp(38px, 11.6vw, 196px); line-height: 1; min-height: 1lh; white-space: nowrap; font-variant-numeric: tabular-nums; }
 	#time .d { width: .62em; }
 	#time .d, #time .s { display: inline-flex; justify-content: center; overflow: visible; }
 	#time .s { width: .34em; }
@@ -67,7 +72,13 @@
 	@media (max-width: 720px) { .viz { grid-template-columns: 1fr; } }
 	.note { color: var(--dim); font-size: clamp(10px, 1vw, 13px); }
 	.note code { unicode-bidi: isolate; direction: ltr; }
-	body.min .table, body.min .note, body.min .viz { display: none; }
+	body.min .table, body.min .note, body.min .viz, body.min .about { display: none; }
+	.about { width: min(100%, 46rem); padding-block: 48px 72px; color: var(--dim); font-size: 14px; line-height: 1.7; border-top: 1px solid var(--rule); }
+	.about h1 { color: var(--fg); font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+	.about h2 { color: var(--fg); font-size: 15px; font-weight: 600; margin: 32px 0 8px; }
+	.about h3 { color: var(--fg); font-size: 14px; font-weight: 400; margin: 20px 0 4px; }
+	.about p, .about ol { margin: 0; }
+	.about ol { padding-inline-start: 2.2em; display: grid; gap: 6px; }
 	dialog { background: var(--bg); color: var(--fg); border: 1px solid var(--rule); border-radius: 8px; padding: 20px; width: min(28em, calc(100vw - 32px)); box-sizing: border-box; font-size: 14px; }
 	dialog::backdrop { background: rgb(0 0 0 / .7); }
 	dialog h2 { margin: 0 0 12px; font-size: 16px; font-weight: 600; }
@@ -111,6 +122,19 @@
 	</div>
 	<p class="note"><span data-i18n="note"></span> <span data-i18n="urlOptions"></span> <code>?min</code> <code>?lag=ms</code> <code>?tz=Area/City</code></p>
 </main>
+<article class="about" id="about">
+	<h1 data-seo="h1"></h1>
+	<p data-seo="intro"></p>
+	<h2 data-seo="howHeading"></h2>
+	<ol><li data-seo="how1"></li><li data-seo="how2"></li><li data-seo="how3"></li></ol>
+	<h2 data-seo="boundHeading"></h2>
+	<p data-seo="boundBody"></p>
+	<h2 data-seo="faqHeading"></h2>
+	<h3 data-seo="q1"></h3><p data-seo="a1"></p>
+	<h3 data-seo="q2"></h3><p data-seo="a2"></p>
+	<h3 data-seo="q3"></h3><p data-seo="a3"></p>
+	<h3 data-seo="q4"></h3><p data-seo="a4"></p>
+</article>
 <dialog id="settings" aria-labelledby="settings-title">
 	<form method="dialog">
 		<h2 id="settings-title" data-i18n="settings"></h2>

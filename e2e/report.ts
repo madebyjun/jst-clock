@@ -41,6 +41,6 @@ export default function report() {
 		if (k === "real-network") continue;
 		lines.push(`### ${k}`, "", "```json", JSON.stringify(v, null, 2), "```", "");
 	}
-	lines.push("スクリーンショット: `artifacts/screenshots/`、言語ごと: `artifacts/i18n/`", "");
+	lines.push("スクリーンショット: `artifacts/screenshots/`、言語ごと: `artifacts/i18n/`、OG画像とリンクプレビューの見本: `artifacts/seo/`", "");
 	writeFileSync("artifacts/e2e-report.md", lines.join("\n"));
 }

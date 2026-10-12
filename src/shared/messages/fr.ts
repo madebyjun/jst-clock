@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — horloge à la milliseconde pour mesurer la dérive vidéo",
-	description: "Une horloge précise à la milliseconde à filmer avec votre caméra. Elle recoupe plusieurs sources d'heure et affiche une marge d'erreur garantie pour mesurer la dérive du timecode de vos enregistrements.",
 	settings: "Réglages",
 	timezone: "Fuseau horaire",
 	timezoneSearch: "Rechercher un fuseau horaire",

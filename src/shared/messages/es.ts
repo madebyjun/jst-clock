@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — reloj de milisegundos para medir el desfase de vídeo",
-	description: "Un reloj con precisión de milisegundos para grabar con tu cámara. Contrasta varias fuentes de hora y muestra un margen de error garantizado para medir el desfase del código de tiempo en tus grabaciones.",
 	settings: "Ajustes",
 	timezone: "Zona horaria",
 	timezoneSearch: "Buscar zona horaria",

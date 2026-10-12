@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — millisekuntikello videon aikapoikkeaman mittaamiseen",
-	description: "Millisekunnin tarkka kello, jonka kuvaat kameralla. Se vertaa useita aikalähteitä ja näyttää taatun virherajan, joten voit mitata tallenteen aikakoodin poikkeaman.",
 	settings: "Asetukset",
 	timezone: "Aikavyöhyke",
 	timezoneSearch: "Hae aikavyöhykettä",

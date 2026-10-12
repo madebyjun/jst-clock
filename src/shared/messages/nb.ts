@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — millisekundklokke for å måle tidsavvik i video",
-	description: "En millisekundnøyaktig klokke du filmer med kameraet. Den sammenligner flere tidskilder og viser en garantert feilgrense, slik at du kan måle tidskodeavviket i opptakene dine.",
 	settings: "Innstillinger",
 	timezone: "Tidssone",
 	timezoneSearch: "Søk etter tidssone",

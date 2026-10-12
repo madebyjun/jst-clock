@@ -1,8 +1,6 @@
 import type { Messages } from "./en.ts";
 
 export default {
-	title: "{name} — videodaki zaman kaymasını ölçmek için milisaniye saati",
-	description: "Kamerayla çekmek için milisaniye hassasiyetinde bir saat. Birden çok zaman kaynağını karşılaştırır ve garantili bir hata sınırı gösterir; böylece kayıtlarınızdaki zaman kodu kaymasını ölçebilirsiniz.",
 	settings: "Ayarlar",
 	timezone: "Saat dilimi",
 	timezoneSearch: "Saat dilimi ara",
