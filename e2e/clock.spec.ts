@@ -311,3 +311,30 @@ test("再同期で区間が狭まった直後も、実際のずれは画面の�
 		delayAfterStamp = 0;
 	}
 });
+
+test("前提を超える速さで時刻源が進んでも、速さの範囲を逆転させず、矛盾を検出して学習をやり直す", async ({ page }) => {
+	test.setTimeout(90_000);
+	// 300ppm は端末の時計の前提（±100ppm）の外。誤差上限の保証はこの前提つきなので、ここでは保証ではなく壊れ方を確かめる
+	const eps = 300e-6;
+	const t0 = Date.now();
+	const truth = (now: number) => now + 200 + eps * (now - t0);
+	await mockSources(page, { edge: truth, akamai: truth, nict: truth, timeapi: truth, timenow: truth });
+	await page.goto("/?interval=1000");
+	const seen = await page.evaluate(async () => {
+		let inverted = 0;
+		let rejected = 0;
+		let negativeText = 0;
+		for (let i = 0; i < 60; i++) {
+			const st = window.__clock.state() as { rate: { lo: number; hi: number; rejected: number } };
+			if (st.rate.lo > st.rate.hi) inverted++;
+			rejected = st.rate.rejected;
+			if (/±\s*[−-]/.test(document.getElementById("rate")!.textContent ?? "")) negativeText++;
+			await new Promise((res) => setTimeout(res, 500));
+		}
+		return { inverted, rejected, negativeText };
+	});
+	save(`${test.info().project.name}-rate-reject`, seen);
+	expect(seen.inverted).toBe(0);
+	expect(seen.negativeText).toBe(0);
+	expect(seen.rejected).toBeGreaterThan(0);
+});
