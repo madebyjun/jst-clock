@@ -144,6 +144,16 @@ test("実際の時刻源で同期した結果が、NTPで別に測った正し�
 	await waitRounds(page, 3);
 	const ntpBefore = await ntpReference();
 	const v = await pageView(page);
+	const inBound = await page.evaluate(async () => {
+		const xs: { shown: number; lo: number; hi: number }[] = [];
+		for (let i = 0; i < 40; i++) {
+			window.__clock.now();
+			const st = window.__clock.state() as { shownOffset: number; bounds: { lo: number; hi: number } };
+			xs.push({ shown: st.shownOffset, lo: st.bounds.lo, hi: st.bounds.hi });
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		return xs;
+	});
 	const ntpAfter = await ntpReference();
 	const ntp = [...ntpBefore, ...ntpAfter].reduce((a, b) => (b.delay < a.delay ? b : a));
 	const diff = v.offsetVsSystem! - ntp.offset;
@@ -160,6 +170,10 @@ test("実際の時刻源で同期した結果が、NTPで別に測った正し�
 	};
 	save("real-network", report);
 	expect(v.agreeing).toBeGreaterThanOrEqual(2);
+	for (const x of inBound) {
+		expect(x.shown).toBeGreaterThanOrEqual(x.lo);
+		expect(x.shown).toBeLessThanOrEqual(x.hi);
+	}
 	expect(Math.abs(diff)).toBeLessThanOrEqual(bound);
 });
 

@@ -40,6 +40,8 @@ declare global {
 window.__clock = {
 	now: (at?: number) => clock.now(at),
 	state: () => ({
+		bounds: clock.bounds(),
+		shownOffset: clock.shownOffset(),
 		estimate: clock.estimate,
 		sources: clock.sourceStates(),
 		rounds: clock.rounds,
