@@ -262,13 +262,18 @@ export function qrField(qr: string | null, key: string) {
 // ---- 入力
 
 function probe(file: string) {
-	const r = spawnSync(FFPROBE, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_type:format=format_name", "-of", "json", file]);
+	const entries = "stream=width,height,codec_type:stream_side_data=rotation:stream_tags=rotate:format=format_name";
+	const r = spawnSync(FFPROBE, ["-v", "error", "-select_streams", "v:0", "-show_entries", entries, "-of", "json", file]);
 	if (r.status !== 0) throw new Error(`ffprobe failed: ${file}\n${r.stderr}`);
 	const j = JSON.parse(r.stdout.toString());
 	const s = j.streams?.[0];
 	if (!s) throw new Error(`no video stream: ${file}`);
 	const image = /image2|png_pipe|jpeg_pipe|webp_pipe|bmp_pipe|tiff_pipe/.test(j.format?.format_name ?? "");
-	return { w: s.width as number, h: s.height as number, image };
+	// ffmpeg は表示用の回転（スマホの縦撮りなど）を既定で適用して出力する。-noautorotate で保存された向きのまま読まないのは、
+	// --corners を利用者が再生ソフトで見たままの座標で書けるようにするため
+	const rotation = Number(s.side_data_list?.find((d: { rotation?: number }) => d.rotation !== undefined)?.rotation ?? s.tags?.rotate ?? 0);
+	const quarter = Math.abs(Math.round(rotation / 90)) % 2 === 1;
+	return { w: (quarter ? s.height : s.width) as number, h: (quarter ? s.width : s.height) as number, image };
 }
 
 /** ffmpeg で8ビットのグレースケールに展開し、1フレームずつ渡す */

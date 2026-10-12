@@ -30,7 +30,7 @@ ffmpeg が必要（`FFMPEG` / `FFPROBE` で場所を指定できる）。
 ```sh
 node tools/decode-timecode.ts movie.mp4 --out movie.csv          # 映像（1フレーム1行）
 node tools/decode-timecode.ts a.png b.png                         # 画像（それぞれ独立に読む）
-node tools/decode-timecode.ts movie.mp4 --corners 100,200,900,200,900,350,100,350   # 白枠の四隅を手で与える（左上・右上・右下・左下）
+node tools/decode-timecode.ts movie.mp4 --corners 100,200,900,200,900,350,100,350   # 白枠の四隅を手で与える（左上・右上・右下・左下。表示用の回転を適用した、再生ソフトで見たままの向きの画素座標）
 node tools/decode-timecode.ts movie.mp4 --around 2026-10-13T00:00:00Z               # QRが読めないときの時刻の基準
 ```
 

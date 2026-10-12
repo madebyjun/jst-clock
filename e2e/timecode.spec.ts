@@ -420,3 +420,54 @@ test("撮影の途中で時刻帯の位置がずれても、ずれた後のフ�
 		expect(r.n).toBe(r.want.n);
 	}
 });
+
+test("表示用の回転（0/90/180/270°）が付いた映像も、再生したときの向きで読み、--corners もその向きの座標で効く", async ({ page }, info) => {
+	await open(page);
+	const want = { t: 1_760_000_123_456, n: 4242 };
+	await page.evaluate(({ t, n }) => window.__timecode.renderAt(t, n), want);
+	const dir = `${DIR}/rotation-${info.project.name}`;
+	mkdirSync(dir, { recursive: true });
+	const png = `${dir}/upright.png`;
+	await page.screenshot({ path: png });
+	// 白枠の外周の四隅（スクショのデバイスピクセル）。静寂域の2モジュールぶん内側
+	const corners = await page.evaluate(() => {
+		const strip = document.querySelector<HTMLCanvasElement>("#timecode .tc-strip")!;
+		const r = strip.getBoundingClientRect();
+		const dpr = devicePixelRatio;
+		const m = strip.width / 40;
+		const x0 = Math.round(r.left * dpr) + 2 * m;
+		const y0 = Math.round(r.top * dpr) + 2 * m;
+		const x1 = x0 + 36 * m;
+		const y1 = y0 + 6 * m;
+		return [x0, y0, x1, y0, x1, y1, x0, y1].join(",");
+	});
+	const ffmpeg = process.env.FFMPEG ?? "ffmpeg";
+	const ffprobe = process.env.FFPROBE ?? "ffprobe";
+	// 保存する絵を逆向きに回しておき、表示用の回転タグで元の向きに戻る映像を作る（スマホの縦撮りと同じ構造）
+	const cases = [
+		{ rotation: 0, filter: "null" },
+		{ rotation: 90, filter: "transpose=clock" },
+		{ rotation: 180, filter: "hflip,vflip" },
+		{ rotation: 270, filter: "transpose=cclock" },
+	];
+	const result = [];
+	for (const c of cases) {
+		const stored = `${dir}/stored-${c.rotation}.mp4`;
+		const video = `${DIR}/${info.project.name}-rotation-${c.rotation}.mp4`;
+		execFileSync(ffmpeg, ["-v", "error", "-y", "-loop", "1", "-i", png, "-vf", c.filter, "-frames:v", "3", "-c:v", "libx264rgb", "-crf", "0", stored]);
+		execFileSync(ffmpeg, ["-v", "error", "-y", "-display_rotation", String(c.rotation), "-i", stored, "-c", "copy", video]);
+		const dims = execFileSync(ffprobe, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=p=0", video]).toString().trim().split(",").slice(0, 2).join("x");
+		const auto = decode([video], `${DIR}/${info.project.name}-rotation-${c.rotation}.csv`);
+		const manual = decode([video], `${DIR}/${info.project.name}-rotation-${c.rotation}-corners.csv`, ["--corners", corners]);
+		result.push({ rotation: c.rotation, storedDims: dims, auto: auto.map((r) => r.status), manual: manual.map((r) => r.status) });
+		for (const r of [...auto, ...manual]) {
+			expect(r.status, `${c.rotation}°`).toBe("ok");
+			expect(r.t_ms).toBe(want.t);
+			expect(r.n_t).toBe(want.n);
+		}
+	}
+	save(`${info.project.name}-timecode-rotation`, { corners, result });
+	// 90/270° では保存された幅と高さが表示と入れ替わっていること（試験が回転の経路を通っていることの確認）
+	expect(result[1].storedDims).toBe(result[3].storedDims);
+	expect(result[1].storedDims).not.toBe(result[0].storedDims);
+});
