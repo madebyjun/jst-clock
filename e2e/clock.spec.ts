@@ -192,3 +192,74 @@ test("端末の時計の速さを学習し、時刻源が全部落ちてもそ�
 	await shot(page, "holdover");
 	save(`${test.info().project.name}-holdover`, { rate, err, half: v.half, withoutRateWouldBeMs: eps * 10_000 });
 });
+
+type Kept = { rounds: number; history: number; points: number; suspends: number };
+
+/** 画面を隠す・戻す。skewMs を渡すと、戻す直前に Date.now だけを進めて「performance.now が止まっていたスリープ」と同じ状況にする */
+async function setHidden(page: Page, hidden: boolean, skewMs = 0): Promise<Kept> {
+	return page.evaluate(
+		({ hidden, skewMs }) => {
+			if (skewMs) {
+				const real = Date.now.bind(Date);
+				Date.now = () => real() + skewMs;
+			}
+			Object.defineProperty(document, "visibilityState", { configurable: true, get: () => (hidden ? "hidden" : "visible") });
+			Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+			document.dispatchEvent(new Event("visibilitychange"));
+			const st = window.__clock.state() as { rounds: number; history: number; rate: { points: number }; suspends: number };
+			return { rounds: st.rounds, history: st.history, points: st.rate.points, suspends: st.suspends };
+		},
+		{ hidden, skewMs },
+	);
+}
+
+async function kept(page: Page): Promise<Kept> {
+	return page.evaluate(() => {
+		const st = window.__clock.state() as { rounds: number; history: number; rate: { points: number }; suspends: number };
+		return { rounds: st.rounds, history: st.history, points: st.rate.points, suspends: st.suspends };
+	});
+}
+
+test("スリープせずにタブを切り替えて戻っても、履歴と速さの推定を残し、すぐ問い合わせ直す", async ({ page }) => {
+	await mockSources(page, { edge: 200, akamai: 200, nict: 200, timeapi: 200, timenow: 200 });
+	await page.goto("/");
+	await waitRounds(page, 3);
+	const before = await kept(page);
+	await setHidden(page, true);
+	await page.waitForTimeout(2_000);
+	const shownAt = Date.now();
+	const atShow = await setHidden(page, false);
+	await waitRounds(page, before.rounds + 1);
+	const roundMs = Date.now() - shownAt;
+	const after = await kept(page);
+	expect(atShow.history).toBeGreaterThanOrEqual(before.history);
+	expect(atShow.points).toBeGreaterThanOrEqual(before.points);
+	expect(after.history).toBeGreaterThanOrEqual(before.history);
+	expect(after.history).toBeGreaterThanOrEqual(2);
+	expect(after.points).toBeGreaterThanOrEqual(before.points);
+	expect(after.suspends).toBe(0);
+	await shot(page, "tab-return");
+	save(`${test.info().project.name}-tab-return`, { before, atShow, after, roundMs });
+});
+
+test("スリープから戻ったときだけリセットし、数秒以内に推移グラフを描ける履歴を集め直す", async ({ page }) => {
+	await mockSources(page, { edge: 200, akamai: 200, nict: 200, timeapi: 200, timenow: 200 });
+	await page.goto("/");
+	await waitRounds(page, 3);
+	const before = await kept(page);
+	await setHidden(page, true);
+	const shownAt = Date.now();
+	const atShow = await setHidden(page, false, 5_000);
+	expect(atShow.suspends).toBe(1);
+	expect(atShow.history).toBe(0);
+	expect(atShow.points).toBe(0);
+	await page.waitForFunction(() => (window.__clock.state() as { history: number }).history >= 2, null, { timeout: 5_000 });
+	const refillMs = Date.now() - shownAt;
+	await waitRounds(page, before.rounds + 3);
+	const after = await kept(page);
+	expect(after.suspends).toBe(1);
+	expect(after.history).toBeGreaterThanOrEqual(2);
+	await expect(page.locator("#dot")).toHaveAttribute("data-level", "ok");
+	await shot(page, "suspend-return");
+	save(`${test.info().project.name}-suspend-return`, { before, atShow, after, refillMs });
+});
