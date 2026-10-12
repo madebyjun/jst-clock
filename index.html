@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>JST Clock</title>
+<style>
+	/* 撮影用の黒地。照明の映り込みを減らすため単一の暗い配色で固定 */
+	:root {
+		--bg: #050607;
+		--fg: #eef2f5;
+		--dim: #66717c;
+		--rule: #1a2026;
+		--ok: #46c98a;
+		--warn: #e8b040;
+		--bad: #ff6464;
+		--mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+		color-scheme: dark;
+	}
+	html, body { height: 100%; margin: 0; }
+	body {
+		background: var(--bg); color: var(--fg); font-family: var(--mono);
+		display: grid; place-items: center; padding-inline: 16px; box-sizing: border-box;
+		padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
+	}
+	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); }
+	#date { color: var(--dim); font-size: clamp(14px, 2.2vw, 30px); letter-spacing: .08em; }
+	#time { font-size: clamp(38px, 11.6vw, 196px); line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; }
+	#time .d { width: .62em; }
+	#time .d, #time .s { display: inline-flex; justify-content: center; overflow: visible; }
+	#time .s { width: .34em; }
+	#time .d:nth-last-child(-n+3) { opacity: .8; }
+	body[data-synced="false"] #time { color: var(--dim); }
+	#bar { position: relative; height: clamp(16px, 2.8vw, 44px); border: 2px solid var(--rule); overflow: hidden; }
+	#fill { position: absolute; inset: 0; background: var(--fg); transform-origin: left; transform: scaleX(0); }
+	#bar i { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--bg); }
+	.status { display: flex; flex-wrap: wrap; gap: .4em 1.8em; color: var(--dim); font-size: clamp(12px, 1.35vw, 18px); }
+	.status b { font-weight: 400; color: var(--fg); }
+	#dot { display: inline-block; width: .7em; height: .7em; border-radius: 50%; margin-right: .45em; background: var(--dim); }
+	#dot[data-level="ok"] { background: var(--ok); }
+	#dot[data-level="warn"] { background: var(--warn); }
+	#dot[data-level="bad"] { background: var(--bad); }
+	.table { overflow-x: auto; }
+	table { border-collapse: collapse; font-size: clamp(11px, 1.15vw, 15px); color: var(--dim); font-variant-numeric: tabular-nums; }
+	th, td { text-align: right; padding: .25em 1.2em .25em 0; white-space: nowrap; }
+	th:first-child, td:first-child { text-align: left; }
+	th { font-weight: 400; border-bottom: 1px solid var(--rule); }
+	tr[data-status="ok"] td:nth-child(2) { color: var(--ok); }
+	tr[data-status="falseticker"] td:nth-child(2), tr[data-status="down"] td:nth-child(2) { color: var(--bad); }
+	.viz { display: grid; grid-template-columns: 3fr 2fr; gap: clamp(12px, 2vw, 32px); }
+	.viz canvas { width: 100%; height: clamp(150px, 18vw, 230px); display: block; }
+	@media (max-width: 720px) { .viz { grid-template-columns: 1fr; } }
+	.note { color: var(--dim); font-size: clamp(10px, 1vw, 13px); }
+	body.min .table, body.min .note, body.min .viz { display: none; }
+</style>
+</head>
+<body data-synced="false">
+<main>
+	<div id="date">----/--/-- JST</div>
+	<div id="time" aria-live="off"></div>
+	<div id="bar"><div id="fill"></div></div>
+	<div class="status">
+		<span><span id="dot" data-level="wait"></span><b id="state">時刻源に問い合わせ中</b></span>
+		<span>誤差上限 <b id="unc">-</b></span>
+		<span>この端末の時計 <b id="dev">-</b></span>
+		<span>描画補正 <b id="frame">-</b></span>
+		<span id="wake"></span>
+	</div>
+	<div class="viz">
+		<canvas id="viz-intervals" aria-label="時刻源ごとの区間と合議の範囲"></canvas>
+		<canvas id="viz-history" aria-label="合議の範囲の推移"></canvas>
+	</div>
+	<div class="table">
+		<table>
+			<thead><tr><th>時刻源</th><th>状態</th><th>合議値との差</th><th>誤差上限 (ms)</th><th>往復 (ms)</th></tr></thead>
+			<tbody id="rows"></tbody>
+		</table>
+	</div>
+	<p class="note">誤差上限は「正しい時刻が必ずこの範囲に入る」幅で、各時刻源への往復時間から求めた値。往復の * は接続確立を含む測定（Resource Timing が使えない時刻源）。グラフの横棒が各時刻源の区間、緑の帯がすべての一致した区間の共通部分で、その中央を時刻として表示している。<code>?min</code> で時計だけ、<code>?lag=ms</code> で表示遅れを手動補正。</p>
+</main>
+<script>if (new URLSearchParams(location.search).has("min")) document.body.classList.add("min");</script>
+<script type="module" src="/src/client/main.ts"></script>
+</body>
+</html>
