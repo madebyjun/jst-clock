@@ -15,6 +15,13 @@
 		--ok: #46c98a;
 		--warn: #e8b040;
 		--bad: #ff6464;
+		/* 背景の円。数字とのコントラストを保つため、どれも輝度 0.04 以下に落とした --warn・--bad・--dim の色相 */
+		--bg-a: #4a3416;
+		--bg-b: #3a1c1c;
+		--bg-c: #1e262e;
+		--bg-d: #352a14;
+		--bg-blur: clamp(14px, 2.6vmin, 36px);
+		--bg-grain: .035;
 		--mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 		color-scheme: dark;
 	}
@@ -24,7 +31,9 @@
 		display: grid; place-items: center; padding-inline: 16px; box-sizing: border-box;
 		padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
 	}
-	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); }
+	#bg { position: fixed; inset: calc(var(--bg-blur) * -2); width: calc(100% + var(--bg-blur) * 4); height: calc(100% + var(--bg-blur) * 4); z-index: 0; pointer-events: none; filter: blur(var(--bg-blur)); will-change: transform; }
+	#bg-grain { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: var(--bg-grain); background-size: 128px 128px; image-rendering: pixelated; }
+	main { position: relative; z-index: 1; width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); }
 	#date { color: var(--dim); font-size: clamp(14px, 2.2vw, 30px); letter-spacing: .08em; }
 	#time { font-size: clamp(38px, 11.6vw, 196px); line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; }
 	#time .d { width: .62em; }
@@ -78,7 +87,7 @@
 			<tbody id="rows"></tbody>
 		</table>
 	</div>
-	<p class="note">誤差上限は「正しい時刻が必ずこの範囲に入る」幅で、各時刻源への往復時間から求めた値。往復の * は接続確立を含む測定（Resource Timing が使えない時刻源）。グラフの横棒が各時刻源の区間、緑の帯がすべての一致した区間の共通部分で、その中央を時刻として表示している。<code>?min</code> で時計だけ、<code>?lag=ms</code> で表示遅れを手動補正。</p>
+	<p class="note">誤差上限は「正しい時刻が必ずこの範囲に入る」幅で、各時刻源への往復時間から求めた値。往復の * は接続確立を含む測定（Resource Timing が使えない時刻源）。グラフの横棒が各時刻源の区間、緑の帯がすべての一致した区間の共通部分で、その中央を時刻として表示している。<code>?min</code> で時計だけ、<code>?lag=ms</code> で表示遅れを手動補正、<code>?bg=off</code> で背景を消す。</p>
 </main>
 <script>if (new URLSearchParams(location.search).has("min")) document.body.classList.add("min");</script>
 <script type="module" src="/src/client/main.ts"></script>

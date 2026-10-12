@@ -1,5 +1,6 @@
 import { Clock, mono } from "./clock.ts";
 import { SOURCES } from "./sources.ts";
+import { startBackground } from "./bg.ts";
 import { drawHistory, drawIntervals } from "./viz.ts";
 
 const params = new URLSearchParams(location.search);
@@ -161,4 +162,5 @@ for (let i = 1; i < 10; i++) {
 }
 setInterval(renderStatus, 500);
 requestAnimationFrame(frame);
+if (params.get("bg") !== "off") startBackground();
 start();
