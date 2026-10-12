@@ -356,6 +356,8 @@ test("設定のスイッチで時刻帯を出し入れでき、再読み込み�
 	await expect(code).toBeVisible();
 	await page.waitForFunction(() => window.__timecode.enabled() && window.__timecode.log().length > 5);
 	await expect(page.locator("body")).toHaveAttribute("data-synced", "true");
+	// QR は500msごとにしか作り直さないので、起動直後の未同期の QR（T-）が残っていると時刻の上位ビットを補えない
+	await page.waitForFunction(() => /^JC1 \S+ T\d/.test(window.__timecode.qr() ?? ""));
 	mkdirSync(DIR, { recursive: true });
 	const f = `${DIR}/${info.project.name}-setting-on.png`;
 	await page.screenshot({ path: f });
@@ -384,4 +386,37 @@ test("設定のスイッチで時刻帯を出し入れでき、再読み込み�
 	await expect(code).toBeHidden();
 	save(`${info.project.name}-timecode-setting`, { decodedAfterReload: r.status, storedWhileOverridden: stored });
 	expect(JSON.parse(stored!)).toMatchObject({ code: true });
+});
+
+test("撮影の途中で時刻帯の位置がずれても、ずれた後のフレームを位置を探し直して読む", async ({ page }, info) => {
+	await open(page);
+	const base = 1_760_000_000_000;
+	const anchor = { n: 500, t: base };
+	const frames = Array.from({ length: 6 }, (_, i) => ({ n: 500 + i, t: base + i * 17 }));
+	const dir = `${DIR}/shift-${info.project.name}`;
+	mkdirSync(dir, { recursive: true });
+	for (const [i, f] of frames.entries()) {
+		// 2枚目から 10 デバイスピクセル右へ（Codex の再現と同じく、モジュールの半分ほど）
+		await page.evaluate(
+			({ f, anchor, shifted }) => {
+				const strip = document.querySelector<HTMLCanvasElement>("#timecode .tc-strip")!;
+				strip.style.transform = shifted ? `translateX(${10 / devicePixelRatio}px)` : "";
+				window.__timecode.renderAt(f.t, f.n, anchor);
+			},
+			{ f, anchor, shifted: i >= 1 },
+		);
+		await page.screenshot({ path: `${dir}/${String(i).padStart(2, "0")}.png` });
+	}
+	// 画像を別々に読むと毎回位置を探すので、無劣化（FFV1）の1本の映像にして、前のフレームの位置を引き継ぐ経路を通す
+	const video = `${DIR}/${info.project.name}-shift.mkv`;
+	execFileSync(process.env.FFMPEG ?? "ffmpeg", ["-v", "error", "-y", "-framerate", "10", "-i", `${dir}/%02d.png`, "-c:v", "ffv1", "-pix_fmt", "gray", video]);
+	const rows = decode([video], `${DIR}/${info.project.name}-shift.csv`);
+	const result = rows.map((r, i) => ({ status: r.status, t: r.t_ms, n: r.n_t, want: frames[i] }));
+	save(`${info.project.name}-timecode-shift`, result);
+	expect(rows).toHaveLength(frames.length);
+	for (const r of result) {
+		expect(r.status).toBe("ok");
+		expect(r.t).toBe(r.want.t);
+		expect(r.n).toBe(r.want.n);
+	}
 });

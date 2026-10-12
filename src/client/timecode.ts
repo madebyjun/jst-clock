@@ -155,6 +155,7 @@ export function mountTimecode(container: HTMLElement, clock: Clock, zoneOffset: 
 			qrKey = Number.NaN;
 		},
 		log: () => log.slice(),
+		qr: () => lastQr,
 		enabled: () => enabled,
 	};
 	return api;
@@ -166,6 +167,7 @@ declare global {
 			renderAt: (t: number | null, n: number, anchor?: { n: number; t: number | null }) => void;
 			live: () => void;
 			log: () => { n: number; t: number | null }[];
+			qr: () => string | null;
 			enabled: () => boolean;
 		};
 	}

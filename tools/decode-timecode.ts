@@ -29,6 +29,7 @@ const MIXED = 0.6;
 const MIN_CONTRAST = 24;
 const INTERP_MAX_GAP = 8;
 const INTERP_STEP_TOLERANCE = 0.25;
+const RELOCATE_COOLDOWN = 4;
 
 type Gray8 = { w: number; h: number; data: Uint8Array };
 type Quad = [number, number][];
@@ -238,6 +239,8 @@ function decodeRows(d: number[][]): Read {
 	};
 }
 
+const decoded = (r: Read) => r.status === "ok" || r.status === "mixed" || r.status === "unsynced";
+
 function readQr(img: Gray8): string | null {
 	const rgba = new Uint8ClampedArray(img.w * img.h * 4);
 	for (let i = 0; i < img.data.length; i++) {
@@ -413,6 +416,7 @@ export async function decode(argv: string[]) {
 		let quad: Quad | null = opt.corners;
 		let qr: string | null = null;
 		let sinceQr = Number.POSITIVE_INFINITY;
+		let cooldown = 0;
 		const rows: Row[] = [];
 		const pts = await frames(file, w, h, (img, index) => {
 			let read: Read | null = quad ? readStrip(img, quad) : null;
@@ -427,6 +431,17 @@ export async function decode(argv: string[]) {
 					status = "lowcontrast";
 				}
 			} else if (!read) status = "lowcontrast";
+			else if (!decoded(read) && !opt.corners && cooldown-- <= 0) {
+				// 混ざったフレームは位置が合っていても読めないので、探し直して見つからなければ数フレームは探さない（全画面の連結成分探索は重い）
+				const better = locate(img)
+					.map((q) => ({ q, r: readStrip(img, q) }))
+					.find((x) => x.r && decoded(x.r));
+				if (better) {
+					quad = better.q;
+					read = better.r;
+					cooldown = 0;
+				} else cooldown = RELOCATE_COOLDOWN;
+			}
 			if (image || sinceQr >= opt.qrEvery || (read && read.status !== "ok" && read.status !== "mixed")) {
 				const q = readQr(img);
 				if (q) qr = q;

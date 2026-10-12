@@ -7,6 +7,7 @@ declare global {
 			renderAt: (t: number | null, n: number, anchor?: { n: number; t: number | null }) => void;
 			live: () => void;
 			log: () => { n: number; t: number | null }[];
+			qr: () => string | null;
 			enabled: () => boolean;
 		};
 	}
