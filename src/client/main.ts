@@ -40,6 +40,9 @@ declare global {
 window.__clock = {
 	now: (at?: number) => clock.now(at),
 	state: () => ({
+		bounds: clock.bounds(),
+		shownOffset: clock.shownOffset(),
+		shownError: clock.shownError(),
 		estimate: clock.estimate,
 		sources: clock.sourceStates(),
 		rounds: clock.rounds,
@@ -91,7 +94,7 @@ function renderStatus() {
 		$("unc").textContent = "-";
 		$("dev").textContent = "-";
 	} else {
-		const half = (e.hi - e.lo) / 2;
+		const half = clock.shownError() ?? (e.hi - e.lo) / 2;
 		const majority = e.agreeing * 2 > e.responding;
 		const verified = e.agreeing >= 2;
 		const holdover = clock.lastRoundOk === 0;
