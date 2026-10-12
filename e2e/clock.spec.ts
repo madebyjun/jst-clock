@@ -2,18 +2,19 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
 import { ntpReference } from "./ntp.ts";
 
-type Offsets = Partial<Record<"edge" | "akamai" | "nict" | "timeapi" | "timenow", number | "down">>;
+type Offsets = Partial<Record<"edge" | "akamai" | "nict" | "timeapi" | "timenow", number | "down" | ((now: number) => number)>>;
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" };
 
-/** 各時刻源を「このマシンの時計 + 指定ms」を返すよう差し替える。"down" は接続失敗 */
+/** 各時刻源を「このマシンの時計 + 指定ms」を返すよう差し替える。"down" は接続失敗、関数なら任意の時刻。o は後から書き換えられる */
 async function mockSources(page: Page, o: Offsets) {
 	const route = async (pattern: string, key: keyof Offsets, body: (t: number) => string, type: string) => {
 		await page.route(pattern, (r) => {
 			const d = o[key];
 			if (d === undefined) return r.fallback();
 			if (d === "down") return r.abort("connectionrefused");
-			return r.fulfill({ status: 200, headers: CORS, contentType: type, body: body(Date.now() + d) });
+			const now = Date.now();
+			return r.fulfill({ status: 200, headers: CORS, contentType: type, body: body(typeof d === "function" ? d(now) : now + d) });
 		});
 	};
 	const json = "application/json";
@@ -160,4 +161,34 @@ test("実際の時刻源で同期した結果が、NTPで別に測った正し�
 	save("real-network", report);
 	expect(v.agreeing).toBeGreaterThanOrEqual(2);
 	expect(Math.abs(diff)).toBeLessThanOrEqual(bound);
+});
+
+test("端末の時計の速さを学習し、時刻源が全部落ちてもその速さで正しい時刻を保つ", async ({ page }) => {
+	test.setTimeout(90_000);
+	// 5000ppm は実在の水晶より極端だが、短時間の試験で速さの推定を確かめるため。maxdrift を合わせて広げる
+	const eps = 5000e-6;
+	const t0 = Date.now();
+	const truth = (now: number) => now + 200 + eps * (now - t0);
+	const o: Offsets = { edge: truth, akamai: truth, nict: truth, timeapi: truth, timenow: truth };
+	await mockSources(page, o);
+	await page.goto("/?interval=1000&maxdrift=20000");
+	await waitRounds(page, 20);
+	const rate = await page.evaluate(() => (window.__clock.state() as { rate: { lo: number; hi: number; points: number } }).rate);
+	expect(rate.lo).toBeLessThanOrEqual(eps);
+	expect(rate.hi).toBeGreaterThanOrEqual(eps);
+	expect(rate.hi - rate.lo).toBeLessThan(1000e-6);
+
+	for (const k of Object.keys(o) as (keyof Offsets)[]) o[k] = "down";
+	await page.waitForTimeout(10_000);
+	await expect(page.locator("#state")).toHaveText("時刻源に接続できず、端末の時計の速さから推定中");
+	const v = await page.evaluate(() => {
+		const st = window.__clock.state() as { estimate: { lo: number; hi: number } };
+		return { now: window.__clock.now()!, sys: Date.now(), half: (st.estimate.hi - st.estimate.lo) / 2 };
+	});
+	const err = v.now - truth(v.sys);
+	// 速さを学習していなければ 5000ppm × 10秒 = 50ms ずれる
+	expect(Math.abs(err)).toBeLessThan(10);
+	expect(Math.abs(err)).toBeLessThanOrEqual(v.half + 2);
+	await shot(page, "holdover");
+	save(`${test.info().project.name}-holdover`, { rate, err, half: v.half, withoutRateWouldBeMs: eps * 10_000 });
 });

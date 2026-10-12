@@ -1,6 +1,8 @@
 import type { Source } from "./sources.ts";
 
 const MAX_DRIFT = 100e-6;
+const RATE_MARGIN = 1e-6;
+const RATE_WINDOW_MS = 60 * 60_000;
 const KEEP_MS = 10 * 60_000;
 const TIMEOUT_MS = 3000;
 const SAMPLES_PER_ROUND = 2;
@@ -23,6 +25,7 @@ export type SourceState = {
 };
 
 export type Estimate = {
+	at: number;
 	offset: number;
 	lo: number;
 	hi: number;
@@ -30,9 +33,49 @@ export type Estimate = {
 	responding: number;
 };
 
-function age(s: Sample, now: number) {
-	const grow = (now - s.at) * MAX_DRIFT;
-	return { lo: s.lo - grow, hi: s.hi + grow };
+/** 「正しい時刻 − 端末の時計」が1msあたり何ms変わるかの範囲。端末の時計が遅いと正 */
+export type Rate = { lo: number; hi: number; points: number; spanMs: number };
+
+function age(s: { lo: number; hi: number; at: number }, now: number, rate: { lo: number; hi: number }) {
+	const dt = now - s.at;
+	return { lo: s.lo + rate.lo * dt, hi: s.hi + rate.hi * dt };
+}
+
+type RatePoint = { at: number; lo: number; hi: number };
+
+/**
+ * 新しい点から順に足し、全ての2点の組が許す速さの共通部分を取る。共通部分が空になったら、それより古い点は
+ * 速さが変わる前のものとみなして捨てる。最小二乗の傾きにしないのは、範囲でないと誤差上限の保証が崩れるため
+ */
+function estimateRate(points: RatePoint[], maxDrift: number): { rate: Rate; kept: RatePoint[] } {
+	let lo = Number.NEGATIVE_INFINITY;
+	let hi = Number.POSITIVE_INFINITY;
+	const kept: RatePoint[] = [];
+	for (let k = points.length - 1; k >= 0; k--) {
+		const p = points[k];
+		let nlo = lo;
+		let nhi = hi;
+		for (const q of kept) {
+			const dt = q.at - p.at;
+			if (dt <= 0) continue;
+			nlo = Math.max(nlo, (q.lo - p.hi) / dt);
+			nhi = Math.min(nhi, (q.hi - p.lo) / dt);
+		}
+		if (nlo > nhi) break;
+		lo = nlo;
+		hi = nhi;
+		kept.unshift(p);
+	}
+	const spanMs = kept.length ? kept[kept.length - 1].at - kept[0].at : 0;
+	return {
+		rate: {
+			lo: Math.max(-maxDrift, lo - RATE_MARGIN),
+			hi: Math.min(maxDrift, hi + RATE_MARGIN),
+			points: kept.length,
+			spanMs,
+		},
+		kept,
+	};
 }
 
 // 区間の重なり数が最大になる範囲を探す（Marzullo法）
@@ -107,13 +150,22 @@ export class Clock {
 	private lastTick = 0;
 	estimate: Estimate | null = null;
 	history: { at: number; offset: number; lo: number; hi: number }[] = [];
+	private ratePoints: RatePoint[] = [];
+	rate: Rate;
+	lastRoundOk = 0;
 	lastSampleAt = new Map<string, number>();
 	rounds = 0;
 	lastSyncAt: number | null = null;
 
-	constructor(private sources: Source[]) {}
+	constructor(
+		private sources: Source[],
+		private maxDrift = MAX_DRIFT,
+	) {
+		this.rate = { lo: -maxDrift, hi: maxDrift, points: 0, spanMs: 0 };
+	}
 
 	async round() {
+		const start = mono();
 		await Promise.all(
 			this.sources.map(async (src) => {
 				for (let i = 0; i < SAMPLES_PER_ROUND; i++) {
@@ -133,12 +185,44 @@ export class Clock {
 		);
 		this.rounds++;
 		this.lastSyncAt = mono();
+		this.learnRate(start);
 		this.recompute();
+		if (this.estimate) this.history.push({ at: this.estimate.at, offset: this.estimate.offset, lo: this.estimate.lo, hi: this.estimate.hi });
+		this.history = this.history.filter((h) => this.lastSyncAt! - h.at < KEEP_MS);
+	}
+
+	/** この回に取れたサンプルだけで合議した区間を、速さの推定の点として足す */
+	private learnRate(start: number) {
+		const end = mono();
+		const bound = { lo: -this.maxDrift, hi: this.maxDrift };
+		const fresh = this.sources
+			.map((src) => {
+				let pick: { lo: number; hi: number } | null = null;
+				for (const s of this.samples.get(src.id) ?? []) {
+					if (s.at < start) continue;
+					// ここで推定済みの速さを使わないのは、推定した速さが自分の根拠になる循環を避けるため
+					const a = age(s, end, bound);
+					if (!pick || a.hi - a.lo < pick.hi - pick.lo) pick = a;
+				}
+				return pick;
+			})
+			.filter((x) => x !== null);
+		this.lastRoundOk = fresh.length;
+		if (fresh.length >= 2) {
+			const m = marzullo(fresh);
+			if (m.count >= 2) this.ratePoints.push({ at: end, lo: m.lo, hi: m.hi });
+		}
+		this.ratePoints = this.ratePoints.filter((p) => end - p.at < RATE_WINDOW_MS);
+		const r = estimateRate(this.ratePoints, this.maxDrift);
+		this.rate = r.rate;
+		this.ratePoints = r.kept;
 	}
 
 	reset() {
 		this.samples.clear();
 		this.history = [];
+		this.ratePoints = [];
+		this.rate = { lo: -this.maxDrift, hi: this.maxDrift, points: 0, spanMs: 0 };
 		this.estimate = null;
 		this.displayOffset = null;
 	}
@@ -148,7 +232,7 @@ export class Clock {
 		this.samples.set(id, list);
 		let pick: { lo: number; hi: number; s: Sample } | null = null;
 		for (const s of list) {
-			const a = age(s, now);
+			const a = age(s, now, this.rate);
 			if (!pick || a.hi - a.lo < pick.hi - pick.lo) pick = { ...a, s };
 		}
 		return pick;
@@ -168,19 +252,18 @@ export class Clock {
 		const m = marzullo(live.map((x) => x.b!));
 		if (requireAgreement && m.count < 2) return;
 		this.estimate = {
+			at: now,
 			offset: (m.lo + m.hi) / 2,
 			lo: m.lo,
 			hi: m.hi,
 			agreeing: m.count,
 			responding: live.length,
 		};
-		this.history.push({ at: now, offset: this.estimate.offset, lo: m.lo, hi: m.hi });
-		this.history = this.history.filter((h) => now - h.at < KEEP_MS);
 	}
 
 	/** 時刻源ごとの保持中サンプルを、経過時間ぶん広げた区間で返す */
 	agedSamples(id: string, now = mono()) {
-		return (this.samples.get(id) ?? []).map((s) => ({ ...age(s, now), at: s.at, timed: s.timed }));
+		return (this.samples.get(id) ?? []).map((s) => ({ ...age(s, now, this.rate), at: s.at, timed: s.timed }));
 	}
 
 	sourceStates(): SourceState[] {
@@ -213,7 +296,7 @@ export class Clock {
 
 	private tick(at: number) {
 		if (!this.estimate) return;
-		const target = this.estimate.offset;
+		const target = this.estimate.offset + ((this.rate.lo + this.rate.hi) / 2) * (at - this.estimate.at);
 		if (this.displayOffset === null || Math.abs(target - this.displayOffset) > JUMP_THRESHOLD_MS) {
 			this.displayOffset = target;
 		} else if (at > this.lastTick) {

@@ -227,22 +227,11 @@ export function drawHistory(canvas: HTMLCanvasElement, clock: Clock) {
 	hist.forEach((p, i) => (i ? g.lineTo(X(p.at), Y(p.offset)) : g.moveTo(X(p.at), Y(p.offset))));
 	g.stroke();
 
-	// 2分以上たまったら、合議値の傾きからこの端末の時計の速さのずれを出す
-	const fit = hist.filter((p) => p.hi - p.lo < 20);
-	if (fit.length >= 5 && fit.at(-1)!.at - fit[0].at > 120_000) {
-		const n = fit.length;
-		const mx = fit.reduce((a, p) => a + p.at, 0) / n;
-		const my = fit.reduce((a, p) => a + p.offset, 0) / n;
-		let sxy = 0;
-		let sxx = 0;
-		for (const p of fit) {
-			sxy += (p.at - mx) * (p.offset - my);
-			sxx += (p.at - mx) ** 2;
-		}
-		const ppm = (sxy / sxx) * 1e6;
+	const r = clock.rate;
+	if (r.points >= 2 && r.hi - r.lo < 150e-6) {
 		g.fillStyle = C.fg;
 		g.textAlign = "right";
-		g.fillText(`端末の時計の速さ ${ppm > 0 ? "−" : "+"}${Math.abs(ppm).toFixed(1)} ppm`, w - 8, 7);
+		g.fillText(`速さの推定: ${r.points}点 / ${Math.round(r.spanMs / 60000)}分`, w - 8, 7);
 		g.textAlign = "left";
 	}
 }

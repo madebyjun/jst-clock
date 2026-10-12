@@ -2,19 +2,21 @@ import { Clock, mono } from "./clock.ts";
 import { SOURCES } from "./sources.ts";
 import { drawHistory, drawIntervals } from "./viz.ts";
 
-const ROUND_INTERVAL_MS = 30_000;
+const params = new URLSearchParams(location.search);
+// interval と maxdrift はE2Eで速さの推定を短時間で確かめるためのもの
+const ROUND_INTERVAL_MS = Number(params.get("interval")) || 30_000;
 const BURST_ROUNDS = 3;
 const JST_MS = 9 * 3600_000;
 
-const params = new URLSearchParams(location.search);
 const extraLag = Number(params.get("lag") ?? 0) || 0;
 
-const clock = new Clock(SOURCES);
+const clock = new Clock(SOURCES, (Number(params.get("maxdrift")) || 100) * 1e-6);
 const $ = (id: string) => document.getElementById(id)!;
 const pad = (n: number, w = 2) => String(n).padStart(w, "0");
 // 桁数が変わっても位置がずれないよう、数字幅の空白(U+2007)で左を埋める
 const fig = (s: string, w: number) => s.padStart(w, "\u2007");
 const fmtMs = (v: number, w = 6) => `${v >= 0 ? "+" : "−"}${fig(Math.abs(v).toFixed(1), w)} ms`;
+const fmtPpm = (v: number) => `${v >= 0 ? "+" : "−"}${fig(Math.abs(v * 1e6).toFixed(1), 5)} ppm`;
 const fmtPm = (v: number, w = 5) => `±${fig(v.toFixed(1), w)}`;
 
 const TEMPLATE = "00:00:00.000";
@@ -36,7 +38,7 @@ declare global {
 }
 window.__clock = {
 	now: (at?: number) => clock.now(at),
-	state: () => ({ estimate: clock.estimate, sources: clock.sourceStates(), rounds: clock.rounds }),
+	state: () => ({ estimate: clock.estimate, sources: clock.sourceStates(), rounds: clock.rounds, rate: clock.rate, lastRoundOk: clock.lastRoundOk }),
 	sync: () => clock.round(),
 };
 
@@ -70,6 +72,7 @@ function frame(ts: number) {
 }
 
 function renderStatus() {
+	if (clock.rounds > 0) clock.recompute();
 	const e = clock.estimate;
 	const states = clock.sourceStates();
 	const dot = $("dot");
@@ -82,13 +85,22 @@ function renderStatus() {
 		const half = (e.hi - e.lo) / 2;
 		const majority = e.agreeing * 2 > e.responding;
 		const verified = e.agreeing >= 2;
-		dot.dataset.level = majority && verified ? "ok" : "warn";
-		$("state").textContent = !verified
-			? `時刻源が${e.agreeing}つだけで、照合できていません`
-			: `${e.responding}つ中${e.agreeing}つの時刻源が一致`;
+		const holdover = clock.lastRoundOk === 0;
+		dot.dataset.level = majority && verified && !holdover ? "ok" : "warn";
+		$("state").textContent = holdover
+			? "時刻源に接続できず、端末の時計の速さから推定中"
+			: !verified
+				? `時刻源が${e.agreeing}つだけで、照合できていません`
+				: `${e.responding}つ中${e.agreeing}つの時刻源が一致`;
 		$("unc").textContent = `${fmtPm(half)} ms`;
 		$("dev").textContent = fmtMs(Date.now() - (mono() + e.offset));
 	}
+	const r = clock.rate;
+	const learned = r.points >= 2 && r.hi - r.lo < 150e-6;
+	// 端末の時計の速さは「正しい時刻 − 端末の時計」の増え方の符号を反転したもの
+	$("rate").textContent = learned
+		? `${fmtPpm(-(r.lo + r.hi) / 2)}（±${((r.hi - r.lo) / 2 * 1e6).toFixed(1)}）`
+		: "推定中";
 	$("frame").textContent = `${fig(frameMs.toFixed(1), 4)} ms${extraLag ? ` + ${extraLag} ms` : ""}`;
 
 	const rows = $("rows");
