@@ -294,8 +294,31 @@ export class Clock {
 		return this.displayOffset === null ? null : at + this.displayOffset;
 	}
 
+	/** 時刻 at における「正しい時刻 − 端末の時計」の保証範囲。推定時点から速さの範囲で外挿する */
+	bounds(at = mono()) {
+		if (!this.estimate) return null;
+		const dt = at - this.estimate.at;
+		return { lo: this.estimate.lo + this.rate.lo * dt, hi: this.estimate.hi + this.rate.hi * dt };
+	}
+
+	/**
+	 * 表示しているオフセットの最大誤差。正しい値は bounds の中のどこにでもありうるので、表示値から遠い側の端までの距離。
+	 * 区間の半幅にしないのは、表示値を端へ切り詰めた直後は反対側の端までの距離が半幅を超えるため
+	 */
+	shownError(at = mono()) {
+		const b = this.bounds(at);
+		if (!b || this.displayOffset === null) return null;
+		return Math.max(this.displayOffset - b.lo, b.hi - this.displayOffset);
+	}
+
+	/** 表示に使っているオフセット。未同期なら null */
+	shownOffset() {
+		return this.displayOffset;
+	}
+
 	private tick(at: number) {
-		if (!this.estimate) return;
+		const b = this.bounds(at);
+		if (!this.estimate || !b) return;
 		const target = this.estimate.offset + ((this.rate.lo + this.rate.hi) / 2) * (at - this.estimate.at);
 		if (this.displayOffset === null || Math.abs(target - this.displayOffset) > JUMP_THRESHOLD_MS) {
 			this.displayOffset = target;
@@ -304,6 +327,8 @@ export class Clock {
 			const d = target - this.displayOffset;
 			this.displayOffset += Math.sign(d) * Math.min(Math.abs(d), step);
 		}
+		// なめらかに寄せる途中でも保証範囲の外には出さない。出すと表示している誤差上限が嘘になるため
+		this.displayOffset = Math.min(Math.max(this.displayOffset, b.lo), b.hi);
 		this.lastTick = Math.max(this.lastTick, at);
 	}
 }

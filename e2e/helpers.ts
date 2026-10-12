@@ -5,14 +5,21 @@ export type Offsets = Partial<Record<"edge" | "akamai" | "nict" | "timeapi" | "t
 
 const CORS = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" };
 
+/** delayAfterStamp: 時刻を決めてから応答するまでの待ち。往復の非対称を作るため */
+let delayAfterStamp = 0;
+export function setDelayAfterStamp(ms: number) {
+	delayAfterStamp = ms;
+}
+
 /** 各時刻源を「このマシンの時計 + 指定ms」を返すよう差し替える。"down" は接続失敗、関数なら任意の時刻。o は後から書き換えられる */
 export async function mockSources(page: Page, o: Offsets) {
 	const route = async (pattern: string, key: keyof Offsets, body: (t: number) => string, type: string) => {
-		await page.route(pattern, (r) => {
+		await page.route(pattern, async (r) => {
 			const d = o[key];
 			if (d === undefined) return r.fallback();
 			if (d === "down") return r.abort("connectionrefused");
 			const now = Date.now();
+			if (delayAfterStamp) await new Promise((res) => setTimeout(res, delayAfterStamp));
 			return r.fulfill({ status: 200, headers: CORS, contentType: type, body: body(typeof d === "function" ? d(now) : now + d) });
 		});
 	};

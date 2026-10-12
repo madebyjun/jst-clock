@@ -1,18 +1,19 @@
 import { expect, type Page, test } from "@playwright/test";
-import { mockSources, type Offsets, save, shot, waitRounds } from "./helpers.ts";
+import { mockSources, type Offsets, save, setDelayAfterStamp, shot, waitRounds } from "./helpers.ts";
 import { ntpReference } from "./ntp.ts";
 
 /** ページが推定した「正しい時刻 − システム時計(Date.now)」と、各時刻源の判定 */
 async function pageView(page: Page) {
 	return page.evaluate(() => {
 		const st = window.__clock.state() as {
+			shownError: number | null;
 			estimate: { lo: number; hi: number; agreeing: number; responding: number } | null;
 			sources: { id: string; status: string }[];
 		};
 		const now = window.__clock.now();
 		return {
 			offsetVsSystem: now === null ? null : now - Date.now(),
-			half: st.estimate ? (st.estimate.hi - st.estimate.lo) / 2 : null,
+			half: st.shownError,
 			agreeing: st.estimate?.agreeing ?? 0,
 			responding: st.estimate?.responding ?? 0,
 			status: Object.fromEntries(st.sources.map((s) => [s.id, s.status])),
@@ -108,6 +109,16 @@ test("実際の時刻源で同期した結果が、NTPで別に測った正し�
 	await waitRounds(page, 3);
 	const ntpBefore = await ntpReference();
 	const v = await pageView(page);
+	const inBound = await page.evaluate(async () => {
+		const xs: { shown: number; lo: number; hi: number }[] = [];
+		for (let i = 0; i < 40; i++) {
+			window.__clock.now();
+			const st = window.__clock.state() as { shownOffset: number; bounds: { lo: number; hi: number } };
+			xs.push({ shown: st.shownOffset, lo: st.bounds.lo, hi: st.bounds.hi });
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		return xs;
+	});
 	const ntpAfter = await ntpReference();
 	const ntp = [...ntpBefore, ...ntpAfter].reduce((a, b) => (b.delay < a.delay ? b : a));
 	const diff = v.offsetVsSystem! - ntp.offset;
@@ -124,6 +135,10 @@ test("実際の時刻源で同期した結果が、NTPで別に測った正し�
 	};
 	save("real-network", report);
 	expect(v.agreeing).toBeGreaterThanOrEqual(2);
+	for (const x of inBound) {
+		expect(x.shown).toBeGreaterThanOrEqual(x.lo);
+		expect(x.shown).toBeLessThanOrEqual(x.hi);
+	}
 	expect(Math.abs(diff)).toBeLessThanOrEqual(bound);
 });
 
@@ -147,7 +162,7 @@ test("端末の時計の速さを学習し、時刻源が全部落ちてもそ�
 	await expect(page.locator("#state")).toHaveText("時刻源に接続できず、端末の時計の速さから推定中");
 	const v = await page.evaluate(() => {
 		const st = window.__clock.state() as { estimate: { lo: number; hi: number } };
-		return { now: window.__clock.now()!, sys: Date.now(), half: (st.estimate.hi - st.estimate.lo) / 2 };
+		return { now: window.__clock.now()!, sys: Date.now(), half: (st as unknown as { shownError: number }).shownError };
 	});
 	const err = v.now - truth(v.sys);
 	// 速さを学習していなければ 5000ppm × 10秒 = 50ms ずれる
@@ -226,4 +241,33 @@ test("スリープから戻ったときだけリセットし、数秒以内に�
 	await expect(page.locator("#dot")).toHaveAttribute("data-level", "ok");
 	await shot(page, "suspend-return");
 	save(`${test.info().project.name}-suspend-return`, { before, atShow, after, refillMs });
+});
+
+test("再同期で区間が狭まった直後も、実際のずれは画面の誤差上限を超えない", async ({ page }) => {
+	test.setTimeout(60_000);
+	setDelayAfterStamp(50);
+	try {
+		await mockSources(page, { edge: 200, akamai: 200, nict: "down", timeapi: "down", timenow: "down" });
+		await page.goto("/ja/");
+		await waitRounds(page, 3);
+		setDelayAfterStamp(20);
+		const worst = await page.evaluate(async () => {
+			await window.__clock.sync();
+			let worst = { excess: Number.NEGATIVE_INFINITY, err: 0, shown: 0 };
+			for (let i = 0; i < 60; i++) {
+				const now = window.__clock.now()!;
+				const sys = Date.now();
+				const shown = (window.__clock.state() as { shownError: number }).shownError;
+				const err = Math.abs(now - (sys + 200));
+				if (err - shown > worst.excess) worst = { excess: err - shown, err, shown };
+				await new Promise((r) => setTimeout(r, 50));
+			}
+			return worst;
+		});
+		save(`${test.info().project.name}-resync-bound`, worst);
+		// Date.now の1ms分解能ぶんだけ許す
+		expect(worst.excess).toBeLessThanOrEqual(1);
+	} finally {
+		setDelayAfterStamp(0);
+	}
 });
