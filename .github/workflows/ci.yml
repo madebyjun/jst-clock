@@ -34,32 +34,3 @@ jobs:
             artifacts/
             playwright-report/
 
-  deploy:
-    needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    environment: production
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 24
-      - run: npm i -g pnpm@12.11.2
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run deploy
-      - run: pnpm exec playwright install --with-deps chromium
-      # デプロイ後に本番URLで実ネットワーク試験まで流す。ローカルでは自前Workerが runner の時計を返すので、本番でしか自前Workerの正しさを確かめられない
-      - run: pnpm test:e2e
-        env:
-          BASE_URL: https://jst-clock.safes-plurals-08.workers.dev
-      - uses: actions/upload-artifact@v7
-        if: always()
-        with:
-          name: e2e-production
-          path: |
-            artifacts/
-            playwright-report/
