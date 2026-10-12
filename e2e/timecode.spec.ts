@@ -1,31 +1,17 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
+import { mockSources, save, waitRounds } from "./helpers.ts";
 
 const DIR = "artifacts/timecode";
-const CORS = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" };
+const ALL_OK = { edge: 0, akamai: 0, nict: 0, timeapi: 0, timenow: 0 };
 
-/** 全時刻源をこのマシンの時計そのままで返す（clock.spec.ts の mockSources と同じ差し替えを、オフセット0だけに絞ったもの） */
-async function mockSources(page: Page) {
-	const json = "application/json";
-	const fulfil = (body: (t: number) => string, type: string) => (r: import("@playwright/test").Route) =>
-		r.fulfill({ status: 200, headers: CORS, contentType: type, body: body(Date.now()) });
-	await page.route("**/api/time?*", fulfil((t) => JSON.stringify({ t, colo: "TEST" }), json));
-	await page.route("https://time.akamai.com/**", fulfil((t) => (t / 1000).toFixed(3), "text/plain"));
-	await page.route("https://*.nict.go.jp/**", fulfil((t) => JSON.stringify({ id: "mock", it: 0, st: t / 1000, leap: 36, next: 0, step: 1 }), json));
-	await page.route("https://timeapi.io/**", fulfil((t) => JSON.stringify({ dateTime: `${new Date(t).toISOString().slice(0, 23)}0000` }), json));
-	await page.route("https://time.now/**", fulfil((t) => JSON.stringify({ utc_datetime: new Date(t).toISOString() }), json));
-}
+test.use({ locale: "ja-JP", timezoneId: "Asia/Tokyo" });
 
 async function open(page: Page, query = "?code=1") {
-	await mockSources(page);
-	await page.goto(`/${query}`);
-	await page.waitForFunction(() => (window.__clock.state() as { rounds: number }).rounds >= 1, null, { timeout: 30_000 });
-}
-
-function save(name: string, data: unknown) {
-	mkdirSync("artifacts/results", { recursive: true });
-	writeFileSync(`artifacts/results/${name}.json`, JSON.stringify(data, null, 2));
+	await mockSources(page, ALL_OK);
+	await page.goto(`/ja/${query}`);
+	await waitRounds(page, 1);
 }
 
 type Decoded = {
@@ -221,6 +207,8 @@ test("実際のページを録画した映像から、ページが描いた時�
 			hasTouch: use.hasTouch,
 			userAgent: use.userAgent,
 			baseURL: use.baseURL,
+			locale: "ja-JP",
+			timezoneId: "Asia/Tokyo",
 			recordVideo: { dir: test.info().outputPath("video"), size: use.viewport ?? undefined },
 		});
 		const page = await context.newPage();
@@ -271,6 +259,7 @@ test("実際のページを録画した映像から、ページが描いた時�
 		const dev = residual.map((r) => r - median);
 		const synced = log.filter((e) => e.t !== null);
 		const frameMs = (synced[synced.length - 1].t! - synced[0].t!) / (synced[synced.length - 1].n - synced[0].n);
+		const pageStep = Math.max(...synced.slice(1).map((e, i) => (e.t! - synced[i].t!) / (e.n - synced[i].n)));
 		const maxGapMs = Math.max(...got.slice(1).map((r, i) => r.t_ms! - got[i].t_ms!));
 		const result = {
 			videoFrames: rows.length,
@@ -284,23 +273,28 @@ test("実際のページを録画した映像から、ページが描いた時�
 			displayFrameMs: frameMs,
 			residualVsPtsMs: { min: Math.min(...dev), max: Math.max(...dev), frames: dev.length },
 			maxGapBetweenConfirmedMs: maxGapMs,
+			maxPageDrawStepMs: pageStep,
 			drawLogFrom: startLen,
 			digits,
 		};
 		save(`${info.project.name}-timecode-live`, result);
 		expect(got.length).toBeGreaterThan(50);
+		// 選んだタイムゾーン（Asia/Tokyo）のオフセットがQRに載っている
+		expect(got.some((r) => / Z540 /.test(r.qr))).toBe(true);
 		expect(result.readRate).toBeGreaterThan(0.9);
 		expect(mismatched.length).toBe(0);
 		expect(unknown.length).toBe(0);
 		expect(backwards).toBe(0);
-		// 録画は約25fpsで、取り込みの遅れが揺らぐ。1表示フレーム + 録画の揺らぎ（100ms）以内
+		// ページ自身は毎フレーム途切れずに描いている（録画の隙間はページではなく取り込み側の取りこぼし）
+		expect(pageStep).toBeLessThan(frameMs * 3);
+		// 録画は約25fpsで、並列実行中は取り込みが数百ms止まることがある。1表示フレーム + 録画の揺らぎ（300ms）以内
 		expect(frameMs).toBeGreaterThan(4);
 		expect(frameMs).toBeLessThan(60);
-		expect(Math.max(-result.residualVsPtsMs.min, result.residualVsPtsMs.max)).toBeLessThanOrEqual(frameMs + 100);
-		expect(maxGapMs).toBeLessThan(250);
+		expect(Math.max(-result.residualVsPtsMs.min, result.residualVsPtsMs.max)).toBeLessThanOrEqual(frameMs + 300);
+		expect(maxGapMs).toBeLessThan(500);
 });
 
-test("?code=1 がなければ時刻帯もQRも描かない", async ({ page }, info) => {
+test("既定（設定もURLもなし）では時刻帯もQRも描かない", async ({ page }, info) => {
 	await open(page, "");
 	await page.waitForTimeout(500);
 	await expect(page.locator("#timecode")).toBeHidden();
@@ -343,4 +337,51 @@ test("時刻帯は数字に重ならず、横にはみ出さない", async ({ pa
 	expect(Number.isInteger(r.moduleDevicePx)).toBe(true);
 	expect(r.bitmapMatchesCss).toBe(true);
 	expect(r.moduleDevicePx).toBeGreaterThanOrEqual(20);
+});
+
+test("設定のスイッチで時刻帯を出し入れでき、再読み込み後も残る。?code=0 はその表示の間だけ消す", async ({ page }, info) => {
+	await open(page, "");
+	const code = page.locator("#timecode");
+	const box = page.locator('#settings [name="code"]');
+	await expect(code).toBeHidden();
+
+	await page.locator("#open-settings").click();
+	await box.check();
+	await page.keyboard.press("Escape");
+	await expect(code).toBeVisible();
+	await page.waitForFunction(() => window.__timecode.log().length > 5);
+
+	await page.reload();
+	await waitRounds(page, 1);
+	await expect(code).toBeVisible();
+	await page.waitForFunction(() => window.__timecode.enabled() && window.__timecode.log().length > 5);
+	await expect(page.locator("body")).toHaveAttribute("data-synced", "true");
+	mkdirSync(DIR, { recursive: true });
+	const f = `${DIR}/${info.project.name}-setting-on.png`;
+	await page.screenshot({ path: f });
+	const [r] = decode([f], `${DIR}/${info.project.name}-setting-on.csv`);
+	expect(confirmed(r), `status=${r.status}`).toBe(true);
+
+	await page.goto("/ja/?code=0");
+	await waitRounds(page, 1);
+	await expect(code).toBeHidden();
+	const stored = await page.evaluate(() => localStorage.getItem("ms-clock:settings"));
+
+	await page.goto("/ja/");
+	await waitRounds(page, 1);
+	await expect(code).toBeVisible();
+	await page.locator("#open-settings").click();
+	await expect(box).toBeChecked();
+	await box.uncheck();
+	await page.keyboard.press("Escape");
+	await expect(code).toBeHidden();
+	const offLen = await page.evaluate(() => window.__timecode.log().length);
+	await page.waitForTimeout(300);
+	expect(await page.evaluate(() => window.__timecode.log().length)).toBe(offLen);
+
+	await page.reload();
+	await waitRounds(page, 1);
+	await expect(code).toBeHidden();
+	save(`${info.project.name}-timecode-setting`, { decodedAfterReload: r.status, storedWhileOverridden: stored });
+	expect(JSON.parse(stored!)).toMatchObject({ code: true });
 });

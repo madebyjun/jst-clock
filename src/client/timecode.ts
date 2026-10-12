@@ -6,7 +6,6 @@ declare const __APP_VERSION__: string;
 
 const QR_PERIOD_MS = 500;
 const QR_QUIET = 4;
-const TZ_MIN = 540;
 const LOG_MAX = 20_000;
 const WHITE = "#fff";
 const BLACK = "#050607";
@@ -17,7 +16,7 @@ type Anchor = { n: number; t: number | null };
 const f1 = (v: number) => v.toFixed(1);
 
 /** QR の中身のうち、アンカー（N, T）以外 */
-function snapshot(clock: Clock, t: number | null, at: number, frameMs: number, lag: number): Meta {
+function snapshot(clock: Clock, t: number | null, at: number, frameMs: number, lag: number, zoneMin: number): Meta {
 	const e = clock.estimate;
 	const r = clock.rate;
 	const holdover = clock.lastRoundOk === 0;
@@ -25,25 +24,27 @@ function snapshot(clock: Clock, t: number | null, at: number, frameMs: number, l
 	const verified = !!e && e.agreeing * 2 > e.responding && e.agreeing >= 2 && !holdover;
 	let slewing = false;
 	const parts = [`F${frameMs.toFixed(3)}`, `L${f1(lag)}`];
-	if (e && t !== null) {
-		const half = (e.hi - e.lo) / 2;
-		const target = at + e.offset + ((r.lo + r.hi) / 2) * (at - e.at);
-		const diff = t - target;
-		slewing = Math.abs(diff) > half;
-		parts.push(`D${f1(Date.now() - (mono() + e.offset))}`, `U${f1(half)}`, `E${f1(diff)}`);
+	const b = clock.bounds(at);
+	const shown = clock.shownOffset();
+	const error = clock.shownError(at);
+	if (b && shown !== null && error !== null && t !== null) {
+		const diff = shown - (b.lo + b.hi) / 2;
+		slewing = Math.abs(diff) > (b.hi - b.lo) / 2;
+		parts.push(`D${f1(Date.now() - (mono() + shown))}`, `U${f1(error)}`, `E${f1(diff)}`);
 	} else parts.push("D-", "U-", "E-");
 	parts.push(learned ? `R${f1(-((r.lo + r.hi) / 2) * 1e6)}` : "R-", learned ? `Q${f1(((r.hi - r.lo) / 2) * 1e6)}` : "Q-");
-	parts.push(`A${e?.agreeing ?? 0}`, `S${e?.responding ?? 0}`, `H${holdover ? 1 : 0}`, `K${clock.rounds}`, `Z${TZ_MIN}`, `V${__APP_VERSION__}`);
+	parts.push(`A${e?.agreeing ?? 0}`, `S${e?.responding ?? 0}`, `H${holdover ? 1 : 0}`, `K${clock.rounds}`, `Z${zoneMin}`, `V${__APP_VERSION__}`);
 	return { verified, slewing, fields: parts.join(" ") };
 }
 
-export function mountTimecode(container: HTMLElement, clock: Clock) {
+/** zoneOffset: 画面に出している地域の、時刻 t における UTC からのずれ（ms） */
+export function mountTimecode(container: HTMLElement, clock: Clock, zoneOffset: (t: number) => number) {
 	const strip = document.createElement("canvas");
 	strip.className = "tc-strip";
-	strip.setAttribute("aria-label", "機械読み取り用の時刻帯");
+	strip.setAttribute("aria-hidden", "true");
 	const qr = document.createElement("canvas");
 	qr.className = "tc-qr";
-	qr.setAttribute("aria-label", "補正の状態を表すQRコード");
+	qr.setAttribute("aria-hidden", "true");
 	container.replaceChildren(strip, qr);
 
 	let enabled = false;
@@ -116,6 +117,8 @@ export function mountTimecode(container: HTMLElement, clock: Clock) {
 		if (anchor) drawQr(`JC1 N${anchor.n} T${anchor.t === null ? "-" : Math.floor(anchor.t)} ${meta.fields}`);
 	}
 
+	const zoneMinutes = (t: number) => Math.round(zoneOffset(t) / 60_000);
+
 	new ResizeObserver(layout).observe(container);
 
 	const api = {
@@ -135,7 +138,7 @@ export function mountTimecode(container: HTMLElement, clock: Clock) {
 			log.push({ n, t: t === null ? null : Math.floor(t) });
 			if (log.length > LOG_MAX) log.splice(0, log.length - LOG_MAX);
 			const key = Math.floor((t ?? at) / QR_PERIOD_MS);
-			const meta = snapshot(clock, t, at, frameMs, lag);
+			const meta = snapshot(clock, t, at, frameMs, lag, zoneMinutes(t ?? at));
 			render(n, t, meta, key !== qrKey ? { n, t } : null);
 			qrKey = key;
 		},
@@ -144,7 +147,7 @@ export function mountTimecode(container: HTMLElement, clock: Clock) {
 	window.__timecode = {
 		renderAt(t: number | null, frameN: number, anchor?: Anchor) {
 			const at = mono();
-			frozen ??= snapshot(clock, t, at, 1000 / 60, 0);
+			frozen ??= snapshot(clock, t, at, 1000 / 60, 0, zoneMinutes(t ?? at));
 			render(frameN, t, frozen, anchor ?? { n: frameN, t });
 		},
 		live() {

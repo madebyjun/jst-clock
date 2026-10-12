@@ -1,45 +1,19 @@
-import { mkdirSync, writeFileSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
+import { mockSources, type Offsets, save, setDelayAfterStamp, shot, waitRounds } from "./helpers.ts";
 import { ntpReference } from "./ntp.ts";
-
-type Offsets = Partial<Record<"edge" | "akamai" | "nict" | "timeapi" | "timenow", number | "down" | ((now: number) => number)>>;
-
-const CORS = { "Access-Control-Allow-Origin": "*", "Cache-Control": "no-store" };
-
-/** 各時刻源を「このマシンの時計 + 指定ms」を返すよう差し替える。"down" は接続失敗、関数なら任意の時刻。o は後から書き換えられる */
-async function mockSources(page: Page, o: Offsets) {
-	const route = async (pattern: string, key: keyof Offsets, body: (t: number) => string, type: string) => {
-		await page.route(pattern, (r) => {
-			const d = o[key];
-			if (d === undefined) return r.fallback();
-			if (d === "down") return r.abort("connectionrefused");
-			const now = Date.now();
-			return r.fulfill({ status: 200, headers: CORS, contentType: type, body: body(typeof d === "function" ? d(now) : now + d) });
-		});
-	};
-	const json = "application/json";
-	await route("**/api/time?*", "edge", (t) => JSON.stringify({ t, colo: "TEST" }), json);
-	await route("https://time.akamai.com/**", "akamai", (t) => (t / 1000).toFixed(3), "text/plain");
-	await route("https://*.nict.go.jp/**", "nict", (t) => JSON.stringify({ id: "mock", it: 0, st: t / 1000, leap: 36, next: 0, step: 1 }), json);
-	await route("https://timeapi.io/**", "timeapi", (t) => JSON.stringify({ dateTime: `${new Date(t).toISOString().slice(0, 23)}0000` }), json);
-	await route("https://time.now/**", "timenow", (t) => JSON.stringify({ utc_datetime: new Date(t).toISOString() }), json);
-}
-
-async function waitRounds(page: Page, n: number) {
-	await page.waitForFunction((n) => (window.__clock.state() as { rounds: number }).rounds >= n, n, { timeout: 30_000 });
-}
 
 /** ページが推定した「正しい時刻 − システム時計(Date.now)」と、各時刻源の判定 */
 async function pageView(page: Page) {
 	return page.evaluate(() => {
 		const st = window.__clock.state() as {
+			shownError: number | null;
 			estimate: { lo: number; hi: number; agreeing: number; responding: number } | null;
 			sources: { id: string; status: string }[];
 		};
 		const now = window.__clock.now();
 		return {
 			offsetVsSystem: now === null ? null : now - Date.now(),
-			half: st.estimate ? (st.estimate.hi - st.estimate.lo) / 2 : null,
+			half: st.shownError,
 			agreeing: st.estimate?.agreeing ?? 0,
 			responding: st.estimate?.responding ?? 0,
 			status: Object.fromEntries(st.sources.map((s) => [s.id, s.status])),
@@ -49,18 +23,9 @@ async function pageView(page: Page) {
 	});
 }
 
-function save(name: string, data: unknown) {
-	mkdirSync("artifacts/results", { recursive: true });
-	writeFileSync(`artifacts/results/${name}.json`, JSON.stringify(data, null, 2));
-}
-
-async function shot(page: Page, name: string) {
-	await page.screenshot({ path: `artifacts/screenshots/${test.info().project.name}-${name}.png` });
-}
-
 test("全時刻源が一致すれば、その時刻をシステム時計より優先して表示する", async ({ page }) => {
 	await mockSources(page, { edge: 200, akamai: 200, nict: 200, timeapi: 200, timenow: 200 });
-	await page.goto("/");
+	await page.goto("/ja/");
 	await waitRounds(page, 3);
 	const v = await pageView(page);
 	expect(v.agreeing).toBe(5);
@@ -73,7 +38,7 @@ test("全時刻源が一致すれば、その時刻をシステム時計より�
 
 test("1つだけ大きくずれた時刻源は除外され、推定に影響しない", async ({ page }) => {
 	await mockSources(page, { edge: 200, akamai: 700, nict: 200, timeapi: 200, timenow: 200 });
-	await page.goto("/");
+	await page.goto("/ja/");
 	await waitRounds(page, 3);
 	const v = await pageView(page);
 	expect(v.status.akamai).toBe("falseticker");
@@ -86,7 +51,7 @@ test("1つだけ大きくずれた時刻源は除外され、推定に影響し�
 
 test("外部の時刻源が全部落ちても自前のWorkerだけで表示し、照合できていないと警告する", async ({ page }) => {
 	await mockSources(page, { akamai: "down", nict: "down", timeapi: "down", timenow: "down" });
-	await page.goto("/");
+	await page.goto("/ja/");
 	await waitRounds(page, 1);
 	await expect(page.locator("body")).toHaveAttribute("data-synced", "true");
 	const v = await pageView(page);
@@ -99,7 +64,7 @@ test("外部の時刻源が全部落ちても自前のWorkerだけで表示し�
 
 test("全時刻源が落ちたら、端末の時計を正しい時刻のように見せない", async ({ page }) => {
 	await mockSources(page, { edge: "down", akamai: "down", nict: "down", timeapi: "down", timenow: "down" });
-	await page.goto("/");
+	await page.goto("/ja/");
 	await waitRounds(page, 1);
 	await expect(page.locator("body")).toHaveAttribute("data-synced", "false");
 	const v = await pageView(page);
@@ -111,7 +76,7 @@ test("全時刻源が落ちたら、端末の時計を正しい時刻のよう�
 
 test("表示時刻は単調に進み、桁の位置は動かない", async ({ page }) => {
 	await mockSources(page, { edge: 0, akamai: 0, nict: 0, timeapi: 0, timenow: 0 });
-	await page.goto("/");
+	await page.goto("/ja/");
 	await waitRounds(page, 3);
 	const r = await page.evaluate(async () => {
 		const xs: { drift: number; t: number; left: number[] }[] = [];
@@ -140,10 +105,20 @@ test("実際の時刻源で同期した結果が、NTPで別に測った正し�
 	test.skip(!!process.env.OFFLINE, "OFFLINE=1 のときはネットワーク試験をしない");
 	test.skip(info.project.name !== "desktop", "ネットワーク試験は1回で十分");
 	test.setTimeout(120_000);
-	await page.goto("/");
+	await page.goto("/ja/");
 	await waitRounds(page, 3);
 	const ntpBefore = await ntpReference();
 	const v = await pageView(page);
+	const inBound = await page.evaluate(async () => {
+		const xs: { shown: number; lo: number; hi: number }[] = [];
+		for (let i = 0; i < 40; i++) {
+			window.__clock.now();
+			const st = window.__clock.state() as { shownOffset: number; bounds: { lo: number; hi: number } };
+			xs.push({ shown: st.shownOffset, lo: st.bounds.lo, hi: st.bounds.hi });
+			await new Promise((r) => setTimeout(r, 50));
+		}
+		return xs;
+	});
 	const ntpAfter = await ntpReference();
 	const ntp = [...ntpBefore, ...ntpAfter].reduce((a, b) => (b.delay < a.delay ? b : a));
 	const diff = v.offsetVsSystem! - ntp.offset;
@@ -160,6 +135,10 @@ test("実際の時刻源で同期した結果が、NTPで別に測った正し�
 	};
 	save("real-network", report);
 	expect(v.agreeing).toBeGreaterThanOrEqual(2);
+	for (const x of inBound) {
+		expect(x.shown).toBeGreaterThanOrEqual(x.lo);
+		expect(x.shown).toBeLessThanOrEqual(x.hi);
+	}
 	expect(Math.abs(diff)).toBeLessThanOrEqual(bound);
 });
 
@@ -171,7 +150,7 @@ test("端末の時計の速さを学習し、時刻源が全部落ちてもそ�
 	const truth = (now: number) => now + 200 + eps * (now - t0);
 	const o: Offsets = { edge: truth, akamai: truth, nict: truth, timeapi: truth, timenow: truth };
 	await mockSources(page, o);
-	await page.goto("/?interval=1000&maxdrift=20000");
+	await page.goto("/ja/?interval=1000&maxdrift=20000");
 	await waitRounds(page, 20);
 	const rate = await page.evaluate(() => (window.__clock.state() as { rate: { lo: number; hi: number; points: number } }).rate);
 	expect(rate.lo).toBeLessThanOrEqual(eps);
@@ -183,7 +162,7 @@ test("端末の時計の速さを学習し、時刻源が全部落ちてもそ�
 	await expect(page.locator("#state")).toHaveText("時刻源に接続できず、端末の時計の速さから推定中");
 	const v = await page.evaluate(() => {
 		const st = window.__clock.state() as { estimate: { lo: number; hi: number } };
-		return { now: window.__clock.now()!, sys: Date.now(), half: (st.estimate.hi - st.estimate.lo) / 2 };
+		return { now: window.__clock.now()!, sys: Date.now(), half: (st as unknown as { shownError: number }).shownError };
 	});
 	const err = v.now - truth(v.sys);
 	// 速さを学習していなければ 5000ppm × 10秒 = 50ms ずれる
@@ -222,7 +201,7 @@ async function kept(page: Page): Promise<Kept> {
 
 test("スリープせずにタブを切り替えて戻っても、履歴と速さの推定を残し、すぐ問い合わせ直す", async ({ page }) => {
 	await mockSources(page, { edge: 200, akamai: 200, nict: 200, timeapi: 200, timenow: 200 });
-	await page.goto("/");
+	await page.goto("/ja/");
 	await waitRounds(page, 3);
 	const before = await kept(page);
 	await setHidden(page, true);
@@ -244,7 +223,7 @@ test("スリープせずにタブを切り替えて戻っても、履歴と速�
 
 test("スリープから戻ったときだけリセットし、数秒以内に推移グラフを描ける履歴を集め直す", async ({ page }) => {
 	await mockSources(page, { edge: 200, akamai: 200, nict: 200, timeapi: 200, timenow: 200 });
-	await page.goto("/");
+	await page.goto("/ja/");
 	await waitRounds(page, 3);
 	const before = await kept(page);
 	await setHidden(page, true);
@@ -262,4 +241,33 @@ test("スリープから戻ったときだけリセットし、数秒以内に�
 	await expect(page.locator("#dot")).toHaveAttribute("data-level", "ok");
 	await shot(page, "suspend-return");
 	save(`${test.info().project.name}-suspend-return`, { before, atShow, after, refillMs });
+});
+
+test("再同期で区間が狭まった直後も、実際のずれは画面の誤差上限を超えない", async ({ page }) => {
+	test.setTimeout(60_000);
+	setDelayAfterStamp(50);
+	try {
+		await mockSources(page, { edge: 200, akamai: 200, nict: "down", timeapi: "down", timenow: "down" });
+		await page.goto("/ja/");
+		await waitRounds(page, 3);
+		setDelayAfterStamp(20);
+		const worst = await page.evaluate(async () => {
+			await window.__clock.sync();
+			let worst = { excess: Number.NEGATIVE_INFINITY, err: 0, shown: 0 };
+			for (let i = 0; i < 60; i++) {
+				const now = window.__clock.now()!;
+				const sys = Date.now();
+				const shown = (window.__clock.state() as { shownError: number }).shownError;
+				const err = Math.abs(now - (sys + 200));
+				if (err - shown > worst.excess) worst = { excess: err - shown, err, shown };
+				await new Promise((r) => setTimeout(r, 50));
+			}
+			return worst;
+		});
+		save(`${test.info().project.name}-resync-bound`, worst);
+		// Date.now の1ms分解能ぶんだけ許す
+		expect(worst.excess).toBeLessThanOrEqual(1);
+	} finally {
+		setDelayAfterStamp(0);
+	}
 });
