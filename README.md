@@ -16,13 +16,19 @@ pnpm run deploy   # cf deploy（手動）。その後 BASE_URL を付けて E2E 
 
 ## 使い方
 
-- `?min` 時計だけを表示する
-- `?lag=ms` 表示遅れを手動で足す（描画1フレーム分は自動で補正済み）
+- 右上でタイムゾーン（任意の IANA 名）と言語を切り替えられる。歯車の設定でアニメーション・機械可読タイムコード・グラフと表・表示遅れの追加補正を変えられ、「初期状態に戻す」で言語・タイムゾーンも含めて端末の既定に戻る
+- 言語ごとのURLは `/{言語タグ}/`（例 `/ja/` `/en/` `/pt-BR/` `/zh-TW/`）。`/` は英語（x-default）で、言語を選んだことがなくブラウザが別の対応言語を希望していれば、その言語のURLへ移る
+- `?min` 時計だけを表示する（その表示の間だけ。保存しない）
+- `?lag=ms` 表示遅れを手動で足す（描画1フレーム分は自動で補正済み。保存しない）
+- `?tz=Area/City` タイムゾーンを指定する（保存しない。存在しない名前なら端末のタイムゾーン）
 
 ## ファイル
 
 - [docs/failure-modes.md](docs/failure-modes.md) 時刻がずれる・壊れる原因と、その対策・確認方法の一覧
-- `src/index.ts` `/api/time` を返す Worker
+- `src/index.ts` `/api/time` を返し、`/` と `/{lang}/` の HTML を翻訳して返す Worker
+- `src/shared/` 製品名・対応言語・翻訳文（Worker とページで共有）
+- `src/client/settings.ts` 設定の保存と購読（`settings.get/set/subscribe/reset`）
+- `src/client/zone.ts` タイムゾーンの時刻計算
 - `src/client/sources.ts` 時刻源の定義
 - `src/client/clock.ts` 区間の収集と合議
 - `src/client/viz.ts` 同期の様子のグラフ
