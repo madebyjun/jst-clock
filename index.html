@@ -15,6 +15,11 @@
 		--ok: #46c98a;
 		--warn: #e8b040;
 		--bad: #ff6464;
+		/* 背景の液滴。白い数字とのコントラスト比を10:1以上に保つため、いちばん明るい色でも相対輝度0.04以下 */
+		--bg-a: #12382d;
+		--bg-b: #0f2b3e;
+		--bg-c: #183330;
+		--bg-grain: .045;
 		--mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 		color-scheme: dark;
 	}
@@ -24,6 +29,8 @@
 		display: grid; place-items: center; padding-inline: 16px; box-sizing: border-box;
 		padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
 	}
+	#bg, #bg-grain { position: fixed; inset: -60px; width: calc(100% + 120px); height: calc(100% + 120px); z-index: -1; pointer-events: none; }
+	#bg-grain { opacity: var(--bg-grain); background-size: 128px 128px; image-rendering: pixelated; }
 	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); }
 	#date { color: var(--dim); font-size: clamp(14px, 2.2vw, 30px); letter-spacing: .08em; }
 	#time { font-size: clamp(38px, 11.6vw, 196px); line-height: 1; white-space: nowrap; font-variant-numeric: tabular-nums; }

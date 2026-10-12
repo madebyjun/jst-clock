@@ -1,4 +1,5 @@
 import { Clock, mono } from "./clock.ts";
+import { startBackground } from "./bg.ts";
 import { SOURCES } from "./sources.ts";
 import { drawHistory, drawIntervals } from "./viz.ts";
 
@@ -161,4 +162,11 @@ for (let i = 1; i < 10; i++) {
 }
 setInterval(renderStatus, 500);
 requestAnimationFrame(frame);
-start();
+// WebGL の初期化は数十〜数百ms メインスレッドを止めることがあり、最初の同期の往復時間に混ざると区間が広がるので、同期が済んでから始める
+start().then(() => {
+	try {
+		startBackground();
+	} catch {
+		// 背景は飾りなので、失敗しても時計は止めない
+	}
+});
