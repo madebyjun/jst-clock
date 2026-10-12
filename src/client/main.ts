@@ -1,3 +1,4 @@
+import { startBackground } from "./bg.ts";
 import { Clock, mono } from "./clock.ts";
 import { setupControls } from "./controls.ts";
 import { applyStatic, lang, msg, redirecting } from "./i18n.ts";
@@ -255,4 +256,5 @@ if (!redirecting) {
 	}, 500);
 	requestAnimationFrame(frame);
 	start();
+	startBackground();
 }
