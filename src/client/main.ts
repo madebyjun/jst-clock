@@ -1,5 +1,6 @@
 import { Clock, mono } from "./clock.ts";
 import { SOURCES } from "./sources.ts";
+import { mountTimecode } from "./timecode.ts";
 import { drawHistory, drawIntervals } from "./viz.ts";
 
 const params = new URLSearchParams(location.search);
@@ -28,6 +29,9 @@ const slots = [...TEMPLATE].map((c) => {
 	return el;
 });
 $("time").replaceChildren(...slots);
+const timecode = mountTimecode($("timecode"), clock);
+if (params.get("code") === "1") timecode.enable();
+
 function setTime(text: string) {
 	for (let i = 0; i < slots.length; i++) if (slots[i].textContent !== text[i]) slots[i].textContent = text[i];
 }
@@ -63,7 +67,8 @@ function frame(ts: number) {
 	}
 	prevTs = ts;
 	// rAF の時刻を描くと画面に出る頃には1フレーム古いので、次のフレームが表示される時刻を描く
-	const t = clock.now(performance.timeOrigin + ts + frameMs + extraLag);
+	const at = performance.timeOrigin + ts + frameMs + extraLag;
+	const t = clock.now(at);
 	if (t !== null) {
 		const jst = new Date(t + JST_MS);
 		const ms = jst.getUTCMilliseconds();
@@ -72,6 +77,7 @@ function frame(ts: number) {
 		$("fill").style.transform = `scaleX(${ms / 1000})`;
 	}
 	document.body.dataset.synced = String(t !== null);
+	timecode.frame(t, at, frameMs, extraLag);
 	if (!vizHidden && ts - lastViz > 100) {
 		lastViz = ts;
 		drawIntervals($("viz-intervals") as HTMLCanvasElement, clock);

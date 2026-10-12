@@ -8,7 +8,7 @@
 pnpm install
 pnpm dev          # 開発サーバー（ローカルでは /api/time がこのマシンの時計を返すので「除外」になるのが正常）
 pnpm typecheck
-pnpm test:e2e     # ビルド → プレビュー → E2E。結果は artifacts/e2e-report.md とスクショ
+pnpm test:e2e     # ビルド → プレビュー → E2E。結果は artifacts/e2e-report.md とスクショ、時刻コードは artifacts/timecode/（ffmpeg が必要）
 BASE_URL=https://… pnpm test:e2e   # デプロイ済みのURLに対して実行
 OFFLINE=1 pnpm test:e2e            # 実ネットワーク試験を飛ばす
 pnpm run deploy   # cf deploy（手動）。その後 BASE_URL を付けて E2E を流し、本番の自前Workerを確かめる
@@ -18,6 +18,20 @@ pnpm run deploy   # cf deploy（手動）。その後 BASE_URL を付けて E2E 
 
 - `?min` 時計だけを表示する
 - `?lag=ms` 表示遅れを手動で足す（描画1フレーム分は自動で補正済み）
+- `?code=1` 映像から機械で読める時刻帯（毎フレーム）と、補正の状態を載せたQR（2Hz）を数字の下に出す。設計は [docs/timecode.md](docs/timecode.md)
+
+## 撮影した映像から時刻を読む
+
+ffmpeg が必要（`FFMPEG` / `FFPROBE` で場所を指定できる）。
+
+```sh
+node tools/decode-timecode.ts movie.mp4 --out movie.csv          # 映像（1フレーム1行）
+node tools/decode-timecode.ts a.png b.png                         # 画像（それぞれ独立に読む）
+node tools/decode-timecode.ts movie.mp4 --corners 100,200,900,200,900,350,100,350   # 白枠の四隅を手で与える（左上・右上・右下・左下）
+node tools/decode-timecode.ts movie.mp4 --around 2026-10-13T00:00:00Z               # QRが読めないときの時刻の基準
+```
+
+CSV の列は `frame, pts, status, n, n_hi, frac, n_t, t_ms, t_iso, t28, t_est_ms, synced, verified, slewing, qr`。確定した時刻は `status` が `ok`（1枚だけ写っている）か `mixed`（2枚が混ざり、多く写った方）の行の `t_ms`（表示値、Unix ms）で、その値を描いたフレームの番号が `n_t`。`blend` は2枚の混ざりで番号 `n`〜`n_hi` と後の値の割合 `frac` だけ、`multi` は3枚以上の混ざりで何も返さない。`t_est_ms` は条件を満たすときだけの補間値で、確定値ではない。`qr` はその時点で最新のQRの中身。
 
 ## ファイル
 
@@ -26,4 +40,6 @@ pnpm run deploy   # cf deploy（手動）。その後 BASE_URL を付けて E2E 
 - `src/client/sources.ts` 時刻源の定義
 - `src/client/clock.ts` 区間の収集と合議
 - `src/client/viz.ts` 同期の様子のグラフ
+- `src/client/timecode.ts` `src/client/timecode-format.ts` 機械で読める時刻帯とQR
+- `tools/decode-timecode.ts` 映像・画像から時刻帯を読むデコーダ
 - `e2e/` E2E。実ネットワーク試験は NTP（UDP）で別に測った時刻と突き合わせる

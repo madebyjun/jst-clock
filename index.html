@@ -51,6 +51,9 @@
 	.viz { display: grid; grid-template-columns: 3fr 2fr; gap: clamp(12px, 2vw, 32px); }
 	.viz canvas { width: 100%; height: clamp(150px, 18vw, 230px); display: block; }
 	@media (max-width: 720px) { .viz { grid-template-columns: 1fr; } }
+	#timecode { display: flex; flex-wrap: wrap; gap: clamp(8px, 1.6vw, 24px); align-items: flex-start; }
+	#timecode[hidden] { display: none; }
+	#timecode canvas { display: block; image-rendering: pixelated; }
 	.note { color: var(--dim); font-size: clamp(10px, 1vw, 13px); }
 	body.min .table, body.min .note, body.min .viz { display: none; }
 </style>
@@ -60,6 +63,7 @@
 	<div id="date">----/--/-- JST</div>
 	<div id="time" aria-live="off"></div>
 	<div id="bar"><div id="fill"></div></div>
+	<div id="timecode" hidden></div>
 	<div class="status">
 		<span><span id="dot" data-level="wait"></span><b id="state">時刻源に問い合わせ中</b></span>
 		<span>誤差上限 <b id="unc">-</b></span>
@@ -78,7 +82,7 @@
 			<tbody id="rows"></tbody>
 		</table>
 	</div>
-	<p class="note">誤差上限は「正しい時刻が必ずこの範囲に入る」幅で、各時刻源への往復時間から求めた値。往復の * は接続確立を含む測定（Resource Timing が使えない時刻源）。グラフの横棒が各時刻源の区間、緑の帯がすべての一致した区間の共通部分で、その中央を時刻として表示している。<code>?min</code> で時計だけ、<code>?lag=ms</code> で表示遅れを手動補正。</p>
+	<p class="note">誤差上限は「正しい時刻が必ずこの範囲に入る」幅で、各時刻源への往復時間から求めた値。往復の * は接続確立を含む測定（Resource Timing が使えない時刻源）。グラフの横棒が各時刻源の区間、緑の帯がすべての一致した区間の共通部分で、その中央を時刻として表示している。<code>?min</code> で時計だけ、<code>?lag=ms</code> で表示遅れを手動補正、<code>?code=1</code> で映像から機械で読める時刻帯とQRを表示。</p>
 </main>
 <script>if (new URLSearchParams(location.search).has("min")) document.body.classList.add("min");</script>
 <script type="module" src="/src/client/main.ts"></script>

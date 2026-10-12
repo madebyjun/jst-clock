@@ -14,7 +14,11 @@
 		"@playwright/test": "^1.64.0",
 		"@types/node": "^26.6.5",
 		"cf": "^1.0.0-beta.12",
+		"jsqr": "^1.4.0",
 		"typescript": "^7.0.2",
 		"vite": "^8.3.0"
+	},
+	"dependencies": {
+		"lean-qr": "^2.7.4"
 	}
 }
