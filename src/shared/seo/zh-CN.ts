@@ -1,7 +1,7 @@
 import type { SeoMessages } from "./en.ts";
 
 export default {
-	title: "毫秒在线时钟与北京时间校准检测 | {name}",
+	title: "在线毫秒时钟：精确时间与时间同步检测 | {name}",
 	description:
 		"精确到毫秒的免费在线时钟，对照多个原子钟时间服务器并显示误差上限。拍摄屏幕即可测量相机与视频时间码的偏差。",
 	ogImageAlt: "{name}：带有误差上限的大型毫秒时钟",
