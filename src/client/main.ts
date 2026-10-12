@@ -6,6 +6,7 @@ const params = new URLSearchParams(location.search);
 // interval と maxdrift はE2Eで速さの推定を短時間で確かめるためのもの
 const ROUND_INTERVAL_MS = Number(params.get("interval")) || 30_000;
 const BURST_ROUNDS = 3;
+const SUSPEND_GAP_MS = 1000;
 const JST_MS = 9 * 3600_000;
 
 const extraLag = Number(params.get("lag") ?? 0) || 0;
@@ -38,7 +39,15 @@ declare global {
 }
 window.__clock = {
 	now: (at?: number) => clock.now(at),
-	state: () => ({ estimate: clock.estimate, sources: clock.sourceStates(), rounds: clock.rounds, rate: clock.rate, lastRoundOk: clock.lastRoundOk }),
+	state: () => ({
+		estimate: clock.estimate,
+		sources: clock.sourceStates(),
+		rounds: clock.rounds,
+		rate: clock.rate,
+		lastRoundOk: clock.lastRoundOk,
+		history: clock.history.length,
+		suspends,
+	}),
 	sync: () => clock.round(),
 };
 
@@ -137,20 +146,44 @@ async function keepAwake() {
 	$("wake").textContent = wakeLock ? "画面スリープ防止中" : "画面スリープ防止が使えません";
 }
 
-document.addEventListener("visibilitychange", () => {
-	if (document.hidden) return;
-	keepAwake();
-	// スリープ中に performance.now が止まる環境があり、古いサンプルの経過時間が信用できないので捨てて取り直す
-	clock.reset();
-	clock.round().then(renderStatus);
-});
+let suspends = 0;
+let wallAt = Date.now();
+let monoAt = performance.now();
+function suspended() {
+	const wall = Date.now();
+	const now = performance.now();
+	const gap = wall - wallAt - (now - monoAt);
+	wallAt = wall;
+	monoAt = now;
+	// 絶対値にしないのは、端末時計が戻る向きの補正はスリープでは起きず、誤検出を増やすだけだから
+	return gap > SUSPEND_GAP_MS;
+}
 
-async function start() {
-	keepAwake();
+async function burst() {
 	for (let i = 0; i < BURST_ROUNDS; i++) {
 		await clock.round();
 		renderStatus();
 	}
+}
+
+function checkSuspend() {
+	if (!suspended()) return false;
+	suspends++;
+	clock.reset();
+	burst();
+	return true;
+}
+
+document.addEventListener("visibilitychange", () => {
+	const reset = checkSuspend();
+	if (document.hidden) return;
+	keepAwake();
+	if (!reset) clock.round().then(renderStatus);
+});
+
+async function start() {
+	keepAwake();
+	await burst();
 	setInterval(() => clock.round().then(renderStatus), ROUND_INTERVAL_MS);
 }
 
@@ -159,6 +192,9 @@ for (let i = 1; i < 10; i++) {
 	tick.style.left = `${i * 10}%`;
 	$("bar").append(tick);
 }
-setInterval(renderStatus, 500);
+setInterval(() => {
+	checkSuspend();
+	renderStatus();
+}, 500);
 requestAnimationFrame(frame);
 start();
