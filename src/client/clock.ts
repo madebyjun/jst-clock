@@ -34,7 +34,7 @@ export type Estimate = {
 };
 
 /** 「正しい時刻 − 端末の時計」が1msあたり何ms変わるかの範囲。端末の時計が遅いと正 */
-export type Rate = { lo: number; hi: number; points: number; spanMs: number };
+export type Rate = { lo: number; hi: number; points: number; spanMs: number; rawLo: number; rawHi: number; rejected: number };
 
 function age(s: { lo: number; hi: number; at: number }, now: number, rate: { lo: number; hi: number }) {
 	const dt = now - s.at;
@@ -67,13 +67,17 @@ function estimateRate(points: RatePoint[], maxDrift: number): { rate: Rate; kept
 		kept.unshift(p);
 	}
 	const spanMs = kept.length ? kept[kept.length - 1].at - kept[0].at : 0;
+	const clo = Math.max(-maxDrift, lo - RATE_MARGIN);
+	const chi = Math.min(maxDrift, hi + RATE_MARGIN);
+	// 物理的にありえない速さ（±maxDrift の外）しか測定と合わないときは、範囲を空のまま使うと区間が時間とともに縮んで保証が崩れるので、学習をやり直す
+	if (clo > chi) {
+		return {
+			rate: { lo: -maxDrift, hi: maxDrift, points: 1, spanMs: 0, rawLo: lo, rawHi: hi, rejected: 1 },
+			kept: kept.slice(-1),
+		};
+	}
 	return {
-		rate: {
-			lo: Math.max(-maxDrift, lo - RATE_MARGIN),
-			hi: Math.min(maxDrift, hi + RATE_MARGIN),
-			points: kept.length,
-			spanMs,
-		},
+		rate: { lo: clo, hi: chi, points: kept.length, spanMs, rawLo: lo, rawHi: hi, rejected: 0 },
 		kept,
 	};
 }
@@ -151,6 +155,7 @@ export class Clock {
 	estimate: Estimate | null = null;
 	history: { at: number; offset: number; lo: number; hi: number }[] = [];
 	private ratePoints: RatePoint[] = [];
+	private rateRejections = 0;
 	rate: Rate;
 	lastRoundOk = 0;
 	lastSampleAt = new Map<string, number>();
@@ -161,7 +166,7 @@ export class Clock {
 		private sources: Source[],
 		private maxDrift = MAX_DRIFT,
 	) {
-		this.rate = { lo: -maxDrift, hi: maxDrift, points: 0, spanMs: 0 };
+		this.rate = { lo: -maxDrift, hi: maxDrift, points: 0, spanMs: 0, rawLo: -Infinity, rawHi: Infinity, rejected: 0 };
 	}
 
 	async round() {
@@ -214,7 +219,8 @@ export class Clock {
 		}
 		this.ratePoints = this.ratePoints.filter((p) => end - p.at < RATE_WINDOW_MS);
 		const r = estimateRate(this.ratePoints, this.maxDrift);
-		this.rate = r.rate;
+		this.rateRejections += r.rate.rejected;
+		this.rate = { ...r.rate, rejected: this.rateRejections };
 		this.ratePoints = r.kept;
 	}
 
@@ -222,7 +228,7 @@ export class Clock {
 		this.samples.clear();
 		this.history = [];
 		this.ratePoints = [];
-		this.rate = { lo: -this.maxDrift, hi: this.maxDrift, points: 0, spanMs: 0 };
+		this.rate = { lo: -this.maxDrift, hi: this.maxDrift, points: 0, spanMs: 0, rawLo: -Infinity, rawHi: Infinity, rejected: 0 };
 		this.estimate = null;
 		this.displayOffset = null;
 	}
