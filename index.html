@@ -30,22 +30,30 @@
 		display: grid; place-items: center; padding-inline: 16px; box-sizing: border-box;
 		padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
 	}
-	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); min-width: 0; padding-block: 12px; min-height: 100svh; box-sizing: border-box; align-content: start; }
+	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); min-width: 0; grid-template-columns: minmax(0, 1fr); padding-block: 12px; min-height: 100svh; box-sizing: border-box; align-content: start; }
 	header { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; font-size: 13px; color: var(--dim); }
 	header input, header select, header button, dialog input, dialog button {
 		font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--rule); border-radius: 4px; padding: 4px 8px; min-height: 32px; box-sizing: border-box;
 	}
 	header input { width: 15em; max-width: 100%; }
-	header select { max-width: 12em; }
+	/* 中身に合わせた幅にしないのは、選択肢が JS で入るまで幅が変わり、携帯幅では見出しの折り返しが変わって時刻が押し下げられるため */
+	header select { width: 12em; max-width: 100%; }
 	header label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 	#open-settings { display: inline-grid; place-items: center; width: 32px; padding: 0; cursor: pointer; }
 	#open-settings svg { width: 18px; height: 18px; }
 	:is(input, select, button):focus-visible { outline: 2px solid var(--fg); outline-offset: 1px; }
 	.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-	#date { color: var(--dim); font-size: clamp(14px, 2.2vw, 30px); letter-spacing: .08em; display: flex; flex-wrap: wrap; gap: 0 1em; }
+	/* 折り返しを成り行きに任せないのは、日付が JS で入った時点で行数が変わり、時刻と進捗バーが押し下げられる（撮影中の画面が跳ぶ）ため。行の高さも数値で固定しないと、CJK などの代替フォントの行の高さで変わる */
+	#date { color: var(--dim); font-size: clamp(14px, 2.2vw, 30px); line-height: 1.3; letter-spacing: .08em; display: flex; flex-wrap: nowrap; gap: 0 1em; height: 1lh; }
+	#date > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: none; max-width: 100%; }
+	#date > #date-zone { flex: 0 1 auto; min-width: 0; }
+	@media (max-width: 900px) {
+		#date { flex-wrap: wrap; height: 2lh; }
+		#date > #date-day { flex-basis: 100%; }
+	}
 	/* 右から左の言語でも反転させないのは、撮影した映像で桁の並びと位置が言語によって変わると読み取れなくなるため */
 	#time, #bar, .num { direction: ltr; unicode-bidi: isolate; }
-	#time { font-size: clamp(38px, 11.6vw, 196px); line-height: 1; min-height: 1lh; white-space: nowrap; font-variant-numeric: tabular-nums; }
+	#time { font-size: clamp(38px, 11.6vw, 196px); line-height: 1; height: 1lh; white-space: nowrap; font-variant-numeric: tabular-nums; }
 	#time .d { width: .62em; }
 	#time .d, #time .s { display: inline-flex; justify-content: center; overflow: visible; }
 	#time .s { width: .34em; }

@@ -224,9 +224,13 @@ test("robots.txt はクロールを許し sitemap を示し、sitemap は全言�
 	save("seo-robots-sitemap", { robots: robotsText, urls: parsed!.length, lastmod: parsed![0].lastmod, apiTime: api.headers()["x-robots-tag"], notFound: [missing.status(), missing.headers()["x-robots-tag"]] });
 });
 
-type Shift = PerformanceEntry & { value: number; hadRecentInput: boolean; sources: { node: Node | null }[] };
+type Shift = PerformanceEntry & { value: number; hadRecentInput: boolean; sources: { node: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly }[] };
 
-test("解説は最初の画面より下にあり、JS 実行後も各言語のまま、?min では出ず、時刻・進捗バー・解説の位置がずれない", async ({ page }, info) => {
+test("解説は最初の画面より下にあり、JS 実行後も各言語のまま、?min では出ず、時刻・進捗バー・解説の位置がずれない", async ({ page, browser }, info) => {
+	const { viewport, deviceScaleFactor, isMobile, hasTouch, userAgent, baseURL } = info.project.use;
+	const noJs = await browser.newContext({ viewport, deviceScaleFactor, isMobile, hasTouch, userAgent, baseURL, javaScriptEnabled: false });
+	const staticPage = await noJs.newPage();
+	const tops = (p: typeof page) => p.evaluate(() => ["time", "bar"].map((id) => Math.round(document.getElementById(id)!.getBoundingClientRect().top * 10) / 10));
 	await mockSources(page, ALL_OK);
 	await page.addInitScript(() => {
 		const w = window as unknown as { __cls: number; __moved: string[] };
@@ -236,16 +240,18 @@ test("解説は最初の画面より下にあり、JS 実行後も各言語の�
 			for (const e of list.getEntries() as Shift[]) {
 				if (e.hadRecentInput) continue;
 				w.__cls += e.value;
-				for (const { node } of e.sources) {
+				for (const { node, previousRect: a, currentRect: b } of e.sources) {
 					const el = node instanceof Element ? node : node?.parentElement;
 					const hit = el?.closest("#time, #bar, .about");
-					if (hit) w.__moved.push(hit.id || hit.className || hit.tagName);
+					if (hit) w.__moved.push(`${hit.id || hit.className} ${Math.round(e.startTime)}ms y ${a.y.toFixed(1)}→${b.y.toFixed(1)} h ${a.height.toFixed(1)}→${b.height.toFixed(1)} date-h ${document.getElementById("date")?.getBoundingClientRect().height.toFixed(1)} "${document.getElementById("date")?.textContent}"`);
 				}
 			}
 		}).observe({ type: "layout-shift", buffered: true });
 	});
 	const results: Record<string, unknown> = {};
 	for (const lang of ["ja", "ar", "en"] as const) {
+		await staticPage.goto(canonicalPath(lang));
+		const before = await tops(staticPage);
 		await page.goto(canonicalPath(lang));
 		await expect(page.locator("body")).toHaveAttribute("data-synced", "true", { timeout: 15_000 });
 		await page.waitForTimeout(1000);
@@ -258,12 +264,15 @@ test("解説は最初の画面より下にあり、JS 実行後も各言語の�
 			moved: (window as unknown as { __moved: string[] }).__moved,
 			overflow: document.documentElement.scrollWidth - innerWidth,
 		}));
+		const after = await tops(page);
+		results[lang] = { ...r, timeAndBarTop: { beforeJs: before, afterSync: after } };
+		save(`${info.project.name}-seo-about`, results);
 		expect(r.aboutTop, lang).toBeGreaterThanOrEqual(r.viewport - 1);
 		expect(r.timeBottom, lang).toBeLessThan(r.viewport);
 		expect(r.h1, lang).toBe(seo(lang, "h1"));
+		expect(after, `${lang}: #time and #bar must not move once JS fills the date and digits`).toEqual(before);
 		expect(r.moved, lang).toEqual([]);
 		expect(r.overflow, lang).toBeLessThanOrEqual(0);
-		results[lang] = r;
 	}
 	await page.goto("/ja/?min");
 	await expect(page.locator(".about")).toBeHidden();
@@ -272,6 +281,7 @@ test("解説は最初の画面より下にあり、JS 実行後も各言語の�
 	await page.locator(".about").scrollIntoViewIfNeeded();
 	await page.locator(".about").screenshot({ path: `artifacts/seo/${info.project.name}-about-ja.png` });
 	save(`${info.project.name}-seo-about`, results);
+	await noJs.close();
 });
 
 test("SNS のリンクプレビューを模したカードを言語ごとに描き、成果物として残す", async ({ page, request }, info) => {
