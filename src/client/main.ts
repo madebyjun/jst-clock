@@ -3,6 +3,7 @@ import { setupControls } from "./controls.ts";
 import { applyStatic, lang, msg, redirecting } from "./i18n.ts";
 import { settings } from "./settings.ts";
 import { SOURCES } from "./sources.ts";
+import { mountTimecode } from "./timecode.ts";
 import { drawHistory, drawIntervals } from "./viz.ts";
 import { Zone } from "./zone.ts";
 
@@ -55,6 +56,11 @@ const slots = [...TEMPLATE].map((c) => {
 	return el;
 });
 $("time").replaceChildren(...slots);
+const timecode = mountTimecode($("timecode"), clock, (t) => zone.offsetAt(t));
+const applyCode = (on: boolean) => (on ? timecode.enable() : timecode.disable());
+applyCode(settings.get("code"));
+settings.subscribe("code", applyCode);
+
 function setTime(text: string) {
 	for (let i = 0; i < slots.length; i++) if (slots[i].textContent !== text[i]) slots[i].textContent = text[i];
 }
@@ -93,7 +99,8 @@ function frame(ts: number) {
 	}
 	prevTs = ts;
 	// rAF の時刻を描くと画面に出る頃には1フレーム古いので、次のフレームが表示される時刻を描く
-	const t = clock.now(performance.timeOrigin + ts + frameMs + extraLag);
+	const at = performance.timeOrigin + ts + frameMs + extraLag;
+	const t = clock.now(at);
 	if (t !== null) {
 		const local = new Date(t + zone.offsetAt(t));
 		const ms = local.getUTCMilliseconds();
@@ -102,6 +109,7 @@ function frame(ts: number) {
 		$("fill").style.transform = `scaleX(${ms / 1000})`;
 	}
 	document.body.dataset.synced = String(t !== null);
+	timecode.frame(t, at, frameMs, extraLag);
 	if (vizShown && ts - lastViz > 100) {
 		lastViz = ts;
 		drawIntervals($("viz-intervals") as HTMLCanvasElement, clock, animate);
