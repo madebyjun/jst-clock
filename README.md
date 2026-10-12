@@ -11,7 +11,7 @@ pnpm typecheck
 pnpm test:e2e     # ビルド → プレビュー → E2E。結果は artifacts/e2e-report.md とスクショ
 BASE_URL=https://… pnpm test:e2e   # デプロイ済みのURLに対して実行
 OFFLINE=1 pnpm test:e2e            # 実ネットワーク試験を飛ばす
-pnpm run deploy   # cf deploy
+pnpm run deploy   # cf deploy（通常は main への push で GitHub Actions が E2E 後に自動デプロイする）
 ```
 
 ## 使い方
