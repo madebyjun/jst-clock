@@ -13,7 +13,7 @@ type Listener<K extends SettingKey> = (value: Settings[K]) => void;
 
 const STORAGE_KEY = "ms-clock:settings";
 const LAG_LIMIT_MS = 1000;
-export const OVERRIDE_PARAMS = ["tz", "min", "lag"] as const;
+export const OVERRIDE_PARAMS = ["tz", "min", "lag", "code"] as const;
 
 export function isValidTimeZone(tz: unknown): tz is string {
 	if (typeof tz !== "string" || !tz) return false;
@@ -110,6 +110,8 @@ function fromUrl(): Partial<Settings> {
 		const v = validators.lag(Number(lag));
 		if (v !== undefined) out.lag = v;
 	}
+	const code = params.get("code");
+	if (code === "1" || code === "0") out.code = code === "1";
 	const tz = params.get("tz");
 	if (tz !== null) {
 		const v = validators.tz(tz);

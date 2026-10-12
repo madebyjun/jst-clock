@@ -78,6 +78,9 @@
 	.viz { display: grid; grid-template-columns: 3fr 2fr; gap: clamp(12px, 2vw, 32px); }
 	.viz canvas { width: 100%; height: clamp(150px, 18vw, 230px); display: block; }
 	@media (max-width: 720px) { .viz { grid-template-columns: 1fr; } }
+	#timecode { display: flex; flex-wrap: wrap; gap: clamp(8px, 1.6vw, 24px); align-items: flex-start; }
+	#timecode[hidden] { display: none; }
+	#timecode canvas { display: block; image-rendering: pixelated; }
 	.note { color: var(--dim); font-size: clamp(10px, 1vw, 13px); }
 	.note code { unicode-bidi: isolate; direction: ltr; }
 	body.min .table, body.min .note, body.min .viz, body.min .about { display: none; }
@@ -110,6 +113,7 @@
 	<div id="date"><span id="date-day">-</span><span id="date-zone"></span><span id="date-offset" class="num"></span></div>
 	<div id="time" aria-live="off"></div>
 	<div id="bar"><div id="fill"></div></div>
+	<div id="timecode" role="img" data-i18n-label="code" hidden></div>
 	<div class="status">
 		<span><span id="dot" data-level="wait"></span><b id="state" data-i18n="querying"></b></span>
 		<span><span data-i18n="errorBound"></span> <b id="unc" class="num">-</b></span>
@@ -128,7 +132,7 @@
 			<tbody id="rows"></tbody>
 		</table>
 	</div>
-	<p class="note"><span data-i18n="note"></span> <span data-i18n="urlOptions"></span> <code>?min</code> <code>?lag=ms</code> <code>?tz=Area/City</code></p>
+	<p class="note"><span data-i18n="note"></span> <span data-i18n="urlOptions"></span> <code>?min</code> <code>?lag=ms</code> <code>?tz=Area/City</code> <code>?code=1</code></p>
 </main>
 <article class="about" id="about">
 	<h1 data-seo="h1"></h1>

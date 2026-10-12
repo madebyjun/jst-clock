@@ -13,9 +13,17 @@ function contentDate() {
 	}
 }
 
+function version() {
+	try {
+		return execFileSync("git", ["rev-parse", "--short", "HEAD"]).toString().trim().toUpperCase();
+	} catch {
+		return "DEV";
+	}
+}
+
 export default defineConfig({
 	plugins: [cloudflare()],
-	define: { __CONTENT_DATE__: JSON.stringify(contentDate()) },
+	define: { __CONTENT_DATE__: JSON.stringify(contentDate()), __APP_VERSION__: JSON.stringify(version()) },
 	server: { port: Number(process.env.PORT) || 5173, strictPort: true },
 	preview: { port: Number(process.env.PORT) || 4173, strictPort: true },
 });
