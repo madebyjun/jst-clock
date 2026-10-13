@@ -149,7 +149,8 @@ test("どの言語でも横にはみ出さず、言語ごとのスクリーン�
 	const overflow: Record<string, number> = {};
 	for (const { tag } of LANGS) {
 		await page.goto(`/${tag}/`);
-		await expect(page.locator("#state")).toHaveText(text("querying", tag));
+		// 同期前だけ出る「問い合わせ中」で確かめないのは、本番のように同期が速いと表示される前に切り替わるため。常に出ている見出しで確かめる
+		await expect(page.locator('[data-i18n="errorBound"]')).toHaveText(text("errorBound", tag));
 		overflow[tag] = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
 	}
 	expect(Object.entries(overflow).filter(([, v]) => v > 0)).toEqual([]);
