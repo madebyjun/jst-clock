@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { confirmed, decode, mockSources, save, waitRounds } from "./helpers.ts";
+import { confirmed, type Decoded, decode, mockSources, save, waitRounds } from "./helpers.ts";
 
 const DIR = "artifacts/timecode";
 const ALL_OK = { edge: 0, akamai: 0, nict: 0, timeapi: 0, timenow: 0 };
@@ -15,8 +16,9 @@ async function open(page: Page, query = "?code=1") {
 }
 
 
-test("決まった時刻を描かせたスクリーンショットから、デコーダがその時刻と番号をそのまま返す", async ({ page }, info) => {
+test("決まった時刻を描かせたスクリーンショットから、デコーダがその時刻と番号をそのまま返す（v2 と旧形式 v1）", async ({ page }, info) => {
 	await open(page);
+	const hold = await page.evaluate(() => window.__timecode.hold());
 	const base = 1_760_000_000_000;
 	const cases = [
 		{ t: base, n: 1 },
@@ -27,18 +29,24 @@ test("決まった時刻を描かせたスクリーンショットから、デ�
 		{ t: base + 0x0aaaaaa, n: 0x5555 },
 	];
 	const files: string[] = [];
+	const wants: { format: 1 | 2; t: number; n: number }[] = [];
 	mkdirSync(DIR, { recursive: true });
-	for (const [i, c] of cases.entries()) {
-		await page.evaluate(({ t, n }) => window.__timecode.renderAt(t, n), c);
-		const f = `${DIR}/${info.project.name}-exact-${i}.png`;
-		await page.screenshot({ path: f });
-		files.push(f);
+	for (const format of [2, 1] as const) {
+		for (const [i, c] of cases.entries()) {
+			await page.evaluate(({ t, n, format }) => window.__timecode.renderAt(t, n, undefined, format), { ...c, format });
+			const f = `${DIR}/${info.project.name}-exact-v${format}-${i}.png`;
+			await page.screenshot({ path: f });
+			files.push(f);
+			// v2 の行0は描画番号ではなく時刻の目盛り floor(t / hold)
+			wants.push({ format, t: Math.floor(c.t), n: format === 2 ? Math.floor(c.t / hold) : c.n });
+		}
 	}
 	const rows = decode(files, `${DIR}/${info.project.name}-exact.csv`);
-	const result = cases.map((c, i) => ({ want: { t: Math.floor(c.t), n: c.n }, got: { status: rows[i].status, t: rows[i].t_ms, n: rows[i].n_t } }));
+	const result = wants.map((want, i) => ({ want, got: { status: rows[i].status, format: rows[i].format, t: rows[i].t_ms, n: rows[i].n_t } }));
 	save(`${info.project.name}-timecode-exact`, result);
 	for (const r of result) {
 		expect(r.got.status).toBe("ok");
+		expect(r.got.format).toBe(r.want.format);
 		expect(r.got.t).toBe(r.want.t);
 		expect(r.got.n).toBe(r.want.n);
 	}
@@ -46,15 +54,19 @@ test("決まった時刻を描かせたスクリーンショットから、デ�
 
 type Composite = { name: string; frames: number[]; kind: "srgb" | "linear" | "tear"; weights?: number[]; split?: number };
 
-test("連続するフレームが混ざった・上下に分かれた画像から、写っていない時刻を返さない", async ({ page }, info) => {
-	test.setTimeout(180_000);
+test("連続するフレームが混ざった・上下に分かれた画像から、写っていない時刻を確定させず、範囲は写った値を覆う", async ({ page }, info) => {
+	test.setTimeout(240_000);
 	await open(page);
+	const hold = await page.evaluate(() => window.__timecode.hold());
 	// 0x...000 から始めると、Codex の反例（127→144→160 の多数決が176）と同じ下位ビットになる
 	const base = 1_760_000_000_000 - (1_760_000_000_000 % 4096);
+	// v2 は行0が floor(t / hold) なので、連続する値は保持時間ずつ離れた時刻（q = 0x7fff→0x8000 の繰り上がりを含む）
+	const q0 = 0x7ffe;
 	const seqs = [
-		{ n: 1000, t: [base + 127, base + 144, base + 160] },
-		{ n: 0x7ffe, t: [base + 4079, base + 4096, base + 4112] },
-		{ n: 254, t: [base + 1_000_000, base + 1_000_017, base + 1_000_033] },
+		{ format: 1 as const, n: 1000, t: [base + 127, base + 144, base + 160] },
+		{ format: 1 as const, n: 0x7ffe, t: [base + 4079, base + 4096, base + 4112] },
+		{ format: 2 as const, n: 0, t: [0, 1, 2].map((k) => (Math.floor(base / hold / N16) * N16 + q0 + k) * hold + 3) },
+		{ format: 2 as const, n: 0, t: [0, 1, 2].map((k) => Math.floor(base / hold) * hold + k * hold + 7) },
 	];
 	const comps: Composite[] = [];
 	for (const a of [0, 0.1, 0.2, 0.3, 0.4, 0.45, 0.5, 0.55, 0.6, 0.7, 0.8, 0.9, 1]) {
@@ -77,15 +89,16 @@ test("連続するフレームが混ざった・上下に分かれた画像か�
 	const files: string[] = [];
 	const meta: { seq: number; comp: Composite; frames: { n: number; t: number }[] }[] = [];
 	for (const [si, seq] of seqs.entries()) {
-		const frames = seq.t.map((t, i) => ({ n: seq.n + i, t }));
+		const frames = seq.t.map((t, i) => ({ n: seq.format === 2 ? Math.floor(t / hold) : seq.n + i, t }));
 		const anchor = frames[0];
+		const format = seq.format;
 		for (const comp of comps) {
 			await page.evaluate(
-				({ frames, comp, anchor }) => {
+				({ frames, comp, anchor, format }) => {
 					const strip = document.querySelector<HTMLCanvasElement>("#timecode .tc-strip")!;
 					const ctx = strip.getContext("2d")!;
 					const imgs = comp.frames.map((i) => {
-						window.__timecode.renderAt(frames[i].t, frames[i].n, anchor);
+						window.__timecode.renderAt(frames[i].t, frames[i].n, anchor, format);
 						return ctx.getImageData(0, 0, strip.width, strip.height).data;
 					});
 					const out = ctx.createImageData(strip.width, strip.height);
@@ -106,7 +119,7 @@ test("連続するフレームが混ざった・上下に分かれた画像か�
 					}
 					ctx.putImageData(out, 0, 0);
 				},
-				{ frames, comp, anchor },
+				{ frames, comp, anchor, format },
 			);
 			const f = `${DIR}/blend/${info.project.name}-${si}-${comp.name}.png`;
 			await page.locator("#timecode").screenshot({ path: f });
@@ -116,15 +129,22 @@ test("連続するフレームが混ざった・上下に分かれた画像か�
 	}
 	const rows = decode(files, `${DIR}/${info.project.name}-blend.csv`);
 	let wrong = 0;
+	let missed = 0;
 	let readable = 0;
 	let mustRead = 0;
 	const detail = rows.map((r, i) => {
 		const m = meta[i];
 		const ns = m.frames.map((f) => f.n);
-		const ok = confirmed(r)
-			? m.frames.some((f) => f.n === r.n_t && Math.floor(f.t) === r.t_ms)
-			: r.n === null || (ns.includes(r.n) && (r.n_hi === null || ns.includes(r.n_hi)));
+		const lo = r.n;
+		const hi = r.n_hi ?? r.n;
+		const inRange = (n: number) => lo !== null && hi !== null && n >= lo && n <= hi;
+		// 範囲は写った可能性のある値を覆う区間（写っていない値も含みうる）。少なくとも1つは写った値を含むこと
+		const ok = confirmed(r) ? m.frames.some((f) => f.n === r.n_t && Math.floor(f.t) === r.t_ms) : lo === null || ns.some(inRange);
 		if (!ok) wrong++;
+		// 寄与が3割以上の値は範囲（または確定値）に入っていること
+		const heavy = m.comp.weights ? m.frames.filter((_, k) => m.comp.weights![k] >= 0.3) : [];
+		const covered = heavy.every((f) => inRange(f.n));
+		if (lo !== null && !covered) missed++;
 		if (confirmed(r)) readable++;
 		// 2枚の混ざりで一方が8割以上なら、差動セルは必ず多い方に読めるはず
 		const w = m.comp.weights;
@@ -134,13 +154,16 @@ test("連続するフレームが混ざった・上下に分かれた画像か�
 			expect(confirmed(r), `${m.comp.name} は確定するはず`).toBe(true);
 			expect(r.t_ms).toBe(Math.floor(dominant.t));
 		}
-		return { file: files[i], comp: m.comp.name, status: r.status, n: r.n, n_hi: r.n_hi, frac: r.frac, n_t: r.n_t, t: r.t_ms, ok };
+		return { file: files[i], comp: m.comp.name, format: r.format, status: r.status, n: r.n, n_hi: r.n_hi, frac: r.frac, n_t: r.n_t, t: r.t_ms, ok, covered };
 	});
-	const summary = { images: rows.length, wrongConfirmedOrCandidates: wrong, confirmed: readable, mustRead, byStatus: count(rows.map((r) => r.status)) };
-	save(`${info.project.name}-timecode-blend`, { summary, detail: detail.filter((d) => !d.ok || d.comp.startsWith("three") || d.comp.includes("0.5")) });
+	const summary = { images: rows.length, wrongConfirmedOrRange: wrong, heavyValueMissed: missed, confirmed: readable, mustRead, byStatus: count(rows.map((r) => r.status)) };
+	save(`${info.project.name}-timecode-blend`, { summary, detail: detail.filter((d) => !d.ok || !d.covered || d.comp.startsWith("three") || d.comp.includes("0.5")) });
 	expect(wrong).toBe(0);
+	expect(missed).toBe(0);
 	expect(mustRead).toBeGreaterThan(0);
 });
+
+const N16 = 2 ** 16;
 
 function count(xs: string[]) {
 	const o: Record<string, number> = {};
@@ -165,20 +188,24 @@ test("実際のページを録画した映像から、ページが描いた時�
 		});
 		const page = await context.newPage();
 		await open(page);
-		await page.waitForFunction(() => window.__timecode.log().length > 30);
+		await page.waitForFunction(() => window.__timecode.log().length > 5);
 		const startLen = await page.evaluate(() => window.__timecode.log().length);
 		await page.waitForTimeout(5_000);
-		// 数字と時刻帯が同じ値を描いていること（同じ rAF で同じ値を使う）
+		// 時刻帯を描き直したフレームでは、数字と時刻帯が同じ値を描いていること（同じ rAF で同じ値を使う）
 		const digits = await page.evaluate(
 			() =>
-				new Promise<{ text: string; t: number | null }>((resolve) =>
-					requestAnimationFrame(() =>
-						setTimeout(() => {
-							const log = window.__timecode.log();
-							resolve({ text: document.getElementById("time")!.textContent!, t: log[log.length - 1].t });
-						}),
-					),
-				),
+				new Promise<{ text: string; t: number | null }>((resolve) => {
+					const start = window.__timecode.log().length;
+					const poll = () =>
+						requestAnimationFrame(() =>
+							setTimeout(() => {
+								const log = window.__timecode.log();
+								if (log.length === start) return poll();
+								resolve({ text: document.getElementById("time")!.textContent!, t: log[log.length - 1].t });
+							}),
+						);
+					poll();
+				}),
 		);
 		const log = await page.evaluate(() => window.__timecode.log());
 		const video = page.video()!;
@@ -209,9 +236,12 @@ test("実際のページを録画した映像から、ページが描いた時�
 		const sorted = [...residual].sort((a, b) => a - b);
 		const median = sorted[Math.floor(sorted.length / 2)];
 		const dev = residual.map((r) => r - median);
+		const hold = await (async () => Number(/ G(\d+) /.exec(got[0].qr)![1]))();
 		const synced = log.filter((e) => e.t !== null);
-		const frameMs = (synced[synced.length - 1].t! - synced[0].t!) / (synced[synced.length - 1].n - synced[0].n);
-		const pageStep = Math.max(...synced.slice(1).map((e, i) => (e.t! - synced[i].t!) / (e.n - synced[i].n)));
+		const frameMs = Number(/ F([\d.]+) /.exec(got[got.length - 1].qr)![1]);
+		// 値は保持時間の区切りをまたいだ最初のフレームで描き直す。描き直しが区切りから大きく遅れていない＝ページは止まらず描いている
+		const pageStep = Math.max(...synced.map((e) => e.t! - e.n * hold));
+		const skipped = synced.slice(1).filter((e, i) => e.n !== synced[i].n + 1).length;
 		const maxGapMs = Math.max(...got.slice(1).map((r, i) => r.t_ms! - got[i].t_ms!));
 		const result = {
 			videoFrames: rows.length,
@@ -225,7 +255,9 @@ test("実際のページを録画した映像から、ページが描いた時�
 			displayFrameMs: frameMs,
 			residualVsPtsMs: { min: Math.min(...dev), max: Math.max(...dev), frames: dev.length },
 			maxGapBetweenConfirmedMs: maxGapMs,
-			maxPageDrawStepMs: pageStep,
+			holdMs: hold,
+			maxRedrawLateMs: pageStep,
+			skippedValues: skipped,
 			drawLogFrom: startLen,
 			digits,
 		};
@@ -238,12 +270,14 @@ test("実際のページを録画した映像から、ページが描いた時�
 		expect(unknown.length).toBe(0);
 		expect(backwards).toBe(0);
 		// ページ自身は毎フレーム途切れずに描いている（録画の隙間はページではなく取り込み側の取りこぼし）
+		expect(pageStep).toBeGreaterThanOrEqual(0);
 		expect(pageStep).toBeLessThan(frameMs * 3);
-		// 録画は約25fpsで、並列実行中は取り込みが数百ms止まることがある。1表示フレーム + 録画の揺らぎ（300ms）以内
+		expect(skipped).toBe(0);
+		// 録画は約25fpsで、並列実行中は取り込みが数百ms止まることがある。保持時間 + 1表示フレーム + 録画の揺らぎ（300ms）以内
 		expect(frameMs).toBeGreaterThan(4);
 		expect(frameMs).toBeLessThan(60);
-		expect(Math.max(-result.residualVsPtsMs.min, result.residualVsPtsMs.max)).toBeLessThanOrEqual(frameMs + 300);
-		expect(maxGapMs).toBeLessThan(500);
+		expect(Math.max(-result.residualVsPtsMs.min, result.residualVsPtsMs.max)).toBeLessThanOrEqual(hold + frameMs + 300);
+		expect(maxGapMs).toBeLessThan(hold + 500);
 });
 
 test("既定（設定もURLもなし）では時刻帯もQRも描かない", async ({ page }, info) => {
@@ -363,7 +397,8 @@ test("撮影の途中で時刻帯の位置がずれても、ずれた後のフ�
 	const video = `${DIR}/${info.project.name}-shift.mkv`;
 	execFileSync(process.env.FFMPEG ?? "ffmpeg", ["-v", "error", "-y", "-framerate", "10", "-i", `${dir}/%02d.png`, "-c:v", "ffv1", "-pix_fmt", "gray", video]);
 	const rows = decode([video], `${DIR}/${info.project.name}-shift.csv`);
-	const result = rows.map((r, i) => ({ status: r.status, t: r.t_ms, n: r.n_t, want: frames[i] }));
+	const hold = await page.evaluate(() => window.__timecode.hold());
+	const result = rows.map((r, i) => ({ status: r.status, t: r.t_ms, n: r.n_t, want: { t: frames[i].t, n: Math.floor(frames[i].t / hold) } }));
 	save(`${info.project.name}-timecode-shift`, result);
 	expect(rows).toHaveLength(frames.length);
 	for (const r of result) {
@@ -412,14 +447,173 @@ test("表示用の回転（0/90/180/270°）が付いた映像も、再生した
 		const auto = decode([video], `${DIR}/${info.project.name}-rotation-${c.rotation}.csv`);
 		const manual = decode([video], `${DIR}/${info.project.name}-rotation-${c.rotation}-corners.csv`, ["--corners", corners]);
 		result.push({ rotation: c.rotation, storedDims: dims, auto: auto.map((r) => r.status), manual: manual.map((r) => r.status) });
+		const hold = await page.evaluate(() => window.__timecode.hold());
 		for (const r of [...auto, ...manual]) {
 			expect(r.status, `${c.rotation}°`).toBe("ok");
 			expect(r.t_ms).toBe(want.t);
-			expect(r.n_t).toBe(want.n);
+			expect(r.n_t).toBe(Math.floor(want.t / hold));
 		}
 	}
 	save(`${info.project.name}-timecode-rotation`, { corners, result });
 	// 90/270° では保存された幅と高さが表示と入れ替わっていること（試験が回転の経路を通っていることの確認）
 	expect(result[1].storedDims).toBe(result[3].storedDims);
 	expect(result[1].storedDims).not.toBe(result[0].storedDims);
+});
+
+type Smear = { format: 1 | 2; exposure: number; capture: number; values: { n: number; t: number; start: number }[] };
+
+test("応答の遅いパネルと長い露光で3値以上がにじんでも、誤った確定値を出さず、範囲で主な値を覆う", async ({ page }, info) => {
+	test.setTimeout(240_000);
+	await open(page);
+	const hold = await page.evaluate(() => window.__timecode.hold());
+	// 上昇と下降で時定数が違う一次応答（液晶は暗くなる方が遅いことが多い）。3τ でほぼ落ち着く
+	const TAU_RISE = 8;
+	const TAU_FALL = 20;
+	const base = Math.floor(1_760_000_000_000 / hold) * hold;
+	const v2 = Array.from({ length: 5 }, (_, k) => ({ n: Math.floor((base + k * hold + 3) / hold), t: base + k * hold + 3, start: k * hold }));
+	const frame = 1000 / 120;
+	const v1 = Array.from({ length: 16 }, (_, k) => ({ n: 9000 + k, t: base + Math.round(k * frame), start: k * frame }));
+	const cases: Smear[] = [];
+	for (const exposure of [4, 1000 / 60, 1000 / 30]) {
+		for (const phase of [-10, 0, 5, 10, 20, 30, 45, 60, 80, 99]) cases.push({ format: 2, exposure, capture: 2 * hold + phase, values: v2 });
+		for (const k of [9, 10, 11, 12]) for (const off of [0, frame / 2]) cases.push({ format: 1, exposure, capture: k * frame + off, values: v1 });
+	}
+	mkdirSync(`${DIR}/smear`, { recursive: true });
+	const files: string[] = [];
+	for (const [i, c] of cases.entries()) {
+		await page.evaluate(
+			({ c, TAU_RISE, TAU_FALL }) => {
+				const strip = document.querySelector<HTMLCanvasElement>("#timecode .tc-strip")!;
+				const ctx = strip.getContext("2d")!;
+				const m = strip.width / 40;
+				const anchor = { n: c.values[0].n, t: c.values[0].t };
+				// 各値のモジュールの白黒（線形光で 0 か 1）
+				const targets = c.values.map((v) => {
+					window.__timecode.renderAt(v.t, v.n, anchor, c.format);
+					const px = ctx.getImageData(0, 0, strip.width, strip.height).data;
+					return Array.from({ length: 6 }, (_, y) => Array.from({ length: 36 }, (_, x) => px[(Math.floor((2 + y + 0.5) * m) * strip.width + Math.floor((2 + x + 0.5) * m)) * 4] > 128 ? 1 : 0));
+				});
+				const dt = 0.25;
+				const active = (t: number) => c.values.reduce((k, v, i) => (v.start <= t ? i : k), 0);
+				for (let y = 0; y < 6; y++) {
+					for (let x = 0; x < 36; x++) {
+						let level = targets[0][y][x];
+						let sum = 0;
+						let samples = 0;
+						for (let t = 0; t <= c.capture; t += dt) {
+							const target = targets[active(t)][y][x];
+							const tau = target > level ? TAU_RISE : TAU_FALL;
+							level += (target - level) * (1 - Math.exp(-dt / tau));
+							if (t > c.capture - c.exposure) {
+								sum += level;
+								samples++;
+							}
+						}
+						const v = Math.round(255 * (sum / samples) ** (1 / 2.2));
+						ctx.fillStyle = `rgb(${v},${v},${v})`;
+						ctx.fillRect((2 + x) * m, (2 + y) * m, m, m);
+					}
+				}
+			},
+			{ c, TAU_RISE, TAU_FALL },
+		);
+		const f = `${DIR}/smear/${info.project.name}-${String(i).padStart(3, "0")}-v${c.format}-e${c.exposure.toFixed(0)}-c${c.capture.toFixed(1)}.png`;
+		await page.locator("#timecode").screenshot({ path: f });
+		files.push(f);
+	}
+	const rows = decode(files, `${DIR}/${info.project.name}-smear.csv`);
+	const lag = (TAU_RISE + TAU_FALL) / 2;
+	let wrong = 0;
+	let dominantMissed = 0;
+	let withValue = 0;
+	const detail = rows.map((r, i) => {
+		const c = cases[i];
+		// 露光の間に目標になっていた値と、その少し前まで目標だった値（応答の尾が残る）
+		const shownAt = (k: number) => {
+			const end = c.values[k + 1]?.start ?? Number.POSITIVE_INFINITY;
+			return c.values[k].start <= c.capture && end >= c.capture - c.exposure - 3 * TAU_FALL;
+		};
+		const present = c.values.filter((_, k) => shownAt(k)).map((v) => v.n);
+		// 応答の遅れぶんずらした露光の窓で、いちばん長く目標だった値
+		const overlap = (k: number) => {
+			const end = c.values[k + 1]?.start ?? Number.POSITIVE_INFINITY;
+			return Math.max(0, Math.min(end, c.capture - lag) - Math.max(c.values[k].start, c.capture - c.exposure - lag));
+		};
+		const dominant = c.values.reduce((best, _, k) => (overlap(k) > overlap(best) ? k : best), 0);
+		const lo = r.n;
+		const hi = r.n_hi ?? r.n;
+		const ok = confirmed(r) ? present.includes(r.n_t!) && c.values.some((v) => v.n === r.n_t && Math.floor(v.t) === r.t_ms) : lo === null || present.some((n) => n >= lo && n <= hi!);
+		if (!ok) wrong++;
+		if (lo !== null) {
+			withValue++;
+			if (!(c.values[dominant].n >= lo && c.values[dominant].n <= hi!)) dominantMissed++;
+		}
+		return { file: files[i], format: c.format, exposure: c.exposure, capture: c.capture, status: r.status, n: lo, n_hi: r.n_hi, n_t: r.n_t, present, dominant: c.values[dominant].n, ok };
+	});
+	const summary = { images: rows.length, byStatus: count(rows.map((r) => r.status)), wrong, withValue, dominantMissed, dominantCoverage: (withValue - dominantMissed) / withValue };
+	save(`${info.project.name}-timecode-smear`, { tauRise: TAU_RISE, tauFall: TAU_FALL, hold, summary, detail });
+	expect(wrong).toBe(0);
+	expect(withValue / rows.length).toBeGreaterThan(0.9);
+	expect(summary.dominantCoverage).toBeGreaterThan(0.9);
+	// v2 では、露光と応答が落ち着いた位相（切り替わりから 3τ + 露光以上あと）は1つの値に確定する
+	const settled = detail.filter((d) => d.format === 2 && ((d.capture % hold) + hold) % hold >= 3 * TAU_FALL + d.exposure);
+	expect(settled.length).toBeGreaterThan(0);
+	for (const d of settled) expect(d.status, d.file).toBe("ok");
+});
+
+/** 実機の映像（利用者の撮影物なので git には入れない）。TIMECODE_REAL_VIDEOS にパスを : 区切りで渡すか、artifacts/real-camera/videos/ に置く */
+function realVideos() {
+	const env = process.env.TIMECODE_REAL_VIDEOS;
+	if (env) return env.split(":").filter((f) => existsSync(f));
+	const dir = "artifacts/real-camera/videos";
+	return existsSync(dir) ? readdirSync(dir).filter((f) => /\.(mov|mp4|mkv|webm)$/i.test(f)).map((f) => `${dir}/${f}`) : [];
+}
+
+test("実機の映像（120Hz の液晶を iPhone で撮影）から、ほぼ全フレームで値か範囲を読み、QR と矛盾しない", async ({}, info) => {
+	const videos = realVideos();
+	test.skip(videos.length === 0, "実機の映像がない（TIMECODE_REAL_VIDEOS か artifacts/real-camera/videos/ に置くと実行する）");
+	test.skip(info.project.name !== "desktop", "映像のデコードは端末の種類に依存しないので1回で十分");
+	test.setTimeout(900_000);
+	mkdirSync("artifacts/real-camera", { recursive: true });
+	const results = [];
+	for (const video of videos) {
+		const name = basename(video).replace(/\.[^.]+$/, "");
+		const rows = decode([video], `artifacts/real-camera/after-${name}.csv`);
+		const usable = rows.filter((r) => (r.status === "ok" || r.status === "mixed" || r.status === "range") && r.n !== null);
+		const timed = usable.filter((r) => r.t_ms !== null || r.t_lo_ms !== null);
+		// 各フレームの番号の範囲は、そのとき見えている QR のアンカーより前ではなく、次に現れるアンカーより後ではない（にじみの分 8 の余裕）
+		const anchorN = (r: Decoded) => Number(/ N(\d+) /.exec(r.qr)?.[1] ?? Number.NaN);
+		let contradictions = 0;
+		for (let i = 0; i < rows.length; i++) {
+			const r = rows[i];
+			if (!usable.includes(r)) continue;
+			const now = anchorN(r);
+			const next = rows.slice(i + 1).map(anchorN).find((n) => n > now);
+			if ((r.n_hi ?? r.n!) < now - 8 || (next !== undefined && r.n! > next + 8)) contradictions++;
+		}
+		let backwards = 0;
+		let prevLo = Number.NEGATIVE_INFINITY;
+		for (const r of usable) {
+			if ((r.n_hi ?? r.n!) < prevLo - 8) backwards++;
+			prevLo = Math.max(prevLo, r.n!);
+		}
+		const widths = usable.map((r) => (r.n_hi ?? r.n!) - r.n! + 1).sort((a, b) => a - b);
+		results.push({
+			video,
+			frames: rows.length,
+			byStatus: count(rows.map((r) => r.status)),
+			usableRate: usable.length / rows.length,
+			timedRate: timed.length / rows.length,
+			medianRangeWidth: widths[Math.floor(widths.length / 2)],
+			contradictions,
+			backwards,
+		});
+	}
+	save("real-camera", results);
+	for (const r of results) {
+		expect(r.usableRate, r.video).toBeGreaterThan(0.9);
+		expect(r.timedRate, r.video).toBeGreaterThan(0.9);
+		expect(r.contradictions, r.video).toBe(0);
+		expect(r.backwards, r.video).toBe(0);
+	}
 });

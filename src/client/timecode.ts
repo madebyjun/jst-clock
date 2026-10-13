@@ -1,6 +1,6 @@
 import { correction, generate } from "lean-qr";
 import { type Clock, mono } from "./clock.ts";
-import { COLS, modules, packRows, QUIET, ROWS } from "./timecode-format.ts";
+import { COLS, HOLDS, type Hold, modules, packRows, packRowsV2, QUIET, ROWS } from "./timecode-format.ts";
 
 declare const __APP_VERSION__: string;
 
@@ -9,6 +9,12 @@ const QR_QUIET = 4;
 const LOG_MAX = 20_000;
 const WHITE = "#fff";
 const BLACK = "#050607";
+const DEFAULT_HOLD: Hold = 100;
+
+function holdFromUrl(): Hold {
+	const v = Number(new URLSearchParams(location.search).get("hold"));
+	return (HOLDS as readonly number[]).includes(v) ? (v as Hold) : DEFAULT_HOLD;
+}
 
 type Meta = { verified: boolean; slewing: boolean; fields: string };
 type Anchor = { n: number; t: number | null };
@@ -16,14 +22,14 @@ type Anchor = { n: number; t: number | null };
 const f1 = (v: number) => v.toFixed(1);
 
 /** QR の中身のうち、アンカー（N, T）以外 */
-function snapshot(clock: Clock, t: number | null, at: number, frameMs: number, lag: number, zoneMin: number): Meta {
+function snapshot(clock: Clock, t: number | null, at: number, frameMs: number, lag: number, zoneMin: number, hold: Hold): Meta {
 	const e = clock.estimate;
 	const r = clock.rate;
 	const holdover = clock.lastRoundOk === 0;
 	const learned = r.points >= 2 && r.hi - r.lo < 150e-6;
 	const verified = !!e && e.agreeing * 2 > e.responding && e.agreeing >= 2 && !holdover;
 	let slewing = false;
-	const parts = [`F${frameMs.toFixed(3)}`, `L${f1(lag)}`];
+	const parts = [`F${frameMs.toFixed(3)}`, `L${f1(lag)}`, `G${hold}`];
 	const b = clock.bounds(at);
 	const shown = clock.shownOffset();
 	const error = clock.shownError(at);
@@ -50,6 +56,8 @@ export function mountTimecode(container: HTMLElement, clock: Clock, zoneOffset: 
 	let enabled = false;
 	let frozen: Meta | null = null;
 	let n = 0;
+	let lastQ = Number.NaN;
+	const hold = holdFromUrl();
 	let qrKey = Number.NaN;
 	let stripPx = 0;
 	let qrBudget = 0;
@@ -112,6 +120,14 @@ export function mountTimecode(container: HTMLElement, clock: Clock, zoneOffset: 
 		}
 	}
 
+	function drawHeld(t0: number | null, q: number, meta: Meta) {
+		drawStrip(packRowsV2({ t0, q, hold, verified: meta.verified, slewing: meta.slewing }));
+	}
+
+	function drawAnchor(anchor: Anchor, meta: Meta) {
+		drawQr(`JC1 N${anchor.n} T${anchor.t === null ? "-" : Math.floor(anchor.t)} ${meta.fields}`);
+	}
+
 	function render(frameN: number, t: number | null, meta: Meta, anchor: Anchor | null) {
 		drawStrip(packRows({ n: frameN, t, verified: meta.verified, slewing: meta.slewing }));
 		if (anchor) drawQr(`JC1 N${anchor.n} T${anchor.t === null ? "-" : Math.floor(anchor.t)} ${meta.fields}`);
@@ -135,24 +151,37 @@ export function mountTimecode(container: HTMLElement, clock: Clock, zoneOffset: 
 		frame(t: number | null, at: number, frameMs: number, lag: number) {
 			if (!enabled || frozen) return;
 			n++;
-			log.push({ n, t: t === null ? null : Math.floor(t) });
-			if (log.length > LOG_MAX) log.splice(0, log.length - LOG_MAX);
 			const key = Math.floor((t ?? at) / QR_PERIOD_MS);
-			const meta = snapshot(clock, t, at, frameMs, lag, zoneMinutes(t ?? at));
-			render(n, t, meta, key !== qrKey ? { n, t } : null);
+			// 毎描画で値を変えると、応答の遅いパネル（120Hz の液晶など）では落ち着く前に次の値になり、どのフレームも読めなくなる
+			const q = Math.floor((t ?? at) / hold);
+			if (q === lastQ && key === qrKey) return;
+			const meta = snapshot(clock, t, at, frameMs, lag, zoneMinutes(t ?? at), hold);
+			if (q !== lastQ) {
+				drawHeld(t, q, meta);
+				log.push({ n: q, t: t === null ? null : Math.floor(t) });
+				if (log.length > LOG_MAX) log.splice(0, log.length - LOG_MAX);
+				lastQ = q;
+			}
+			if (key !== qrKey) drawAnchor({ n, t }, meta);
 			qrKey = key;
 		},
 	};
 
 	window.__timecode = {
-		renderAt(t: number | null, frameN: number, anchor?: Anchor) {
+		renderAt(t: number | null, frameN: number, anchor?: Anchor, format: 1 | 2 = 2) {
 			const at = mono();
-			frozen ??= snapshot(clock, t, at, 1000 / 60, 0, zoneMinutes(t ?? at));
-			render(frameN, t, frozen, anchor ?? { n: frameN, t });
+			frozen ??= snapshot(clock, t, at, 1000 / 60, 0, zoneMinutes(t ?? at), hold);
+			if (format === 1) render(frameN, t, frozen, anchor ?? { n: frameN, t });
+			else {
+				drawHeld(t, Math.floor((t ?? at) / hold), frozen);
+				drawAnchor(anchor ?? { n: frameN, t }, frozen);
+			}
 		},
+		hold: () => hold,
 		live() {
 			frozen = null;
 			qrKey = Number.NaN;
+			lastQ = Number.NaN;
 		},
 		log: () => log.slice(),
 		qr: () => lastQr,
@@ -164,8 +193,11 @@ export function mountTimecode(container: HTMLElement, clock: Clock, zoneOffset: 
 declare global {
 	interface Window {
 		__timecode: {
-			renderAt: (t: number | null, n: number, anchor?: { n: number; t: number | null }) => void;
+			/** format 2（既定）は保持型で、行0は floor(t / hold)。n は QR のアンカーにだけ使う。format 1 は描画ごとの旧形式 */
+			renderAt: (t: number | null, n: number, anchor?: { n: number; t: number | null }, format?: 1 | 2) => void;
+			hold: () => number;
 			live: () => void;
+			/** 時刻帯を描き直した記録。n は行0の値（v2 では floor(t / hold)） */
 			log: () => { n: number; t: number | null }[];
 			qr: () => string | null;
 			enabled: () => boolean;

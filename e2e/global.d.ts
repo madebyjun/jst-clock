@@ -9,7 +9,8 @@ declare global {
 			bench: (n: number) => number | null;
 		};
 		__timecode: {
-			renderAt: (t: number | null, n: number, anchor?: { n: number; t: number | null }) => void;
+			renderAt: (t: number | null, n: number, anchor?: { n: number; t: number | null }, format?: 1 | 2) => void;
+			hold: () => number;
 			live: () => void;
 			log: () => { n: number; t: number | null }[];
 			qr: () => string | null;

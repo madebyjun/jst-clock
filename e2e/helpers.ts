@@ -60,11 +60,15 @@ export type Decoded = {
 	frame: number;
 	pts: number | null;
 	status: string;
+	format: number | null;
+	hold_ms: number | null;
 	n: number | null;
 	n_hi: number | null;
 	frac: number | null;
 	n_t: number | null;
 	t_ms: number | null;
+	t_lo_ms: number | null;
+	t_hi_ms: number | null;
 	t_est_ms: number | null;
 	qr: string;
 };
@@ -92,11 +96,15 @@ export function decode(files: string[], csvPath: string, extra: string[] = []): 
 			frame: Number(o.frame),
 			pts: num(o.pts),
 			status: o.status,
+			format: num(o.format),
+			hold_ms: num(o.hold_ms),
 			n: num(o.n),
 			n_hi: num(o.n_hi),
 			frac: num(o.frac),
 			n_t: num(o.n_t),
 			t_ms: num(o.t_ms),
+			t_lo_ms: num(o.t_lo_ms),
+			t_hi_ms: num(o.t_hi_ms),
 			t_est_ms: num(o.t_est_ms),
 			qr: o.qr,
 		};

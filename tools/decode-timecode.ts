@@ -1,7 +1,7 @@
 // 撮影した映像（または画像）から時刻帯とQRを読み、フレームごとの CSV を出す。形式は docs/timecode.md
 //   node tools/decode-timecode.ts <映像|画像...> [--out out.csv] [--corners x,y,x,y,x,y,x,y] [--around ISO|ms] [--qr-every n]
 import { spawn, spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 import jsQR from "jsqr";
 import {
 	BITS_PER_ROW,
@@ -13,11 +13,14 @@ import {
 	FLAG_VERIFIED,
 	FLAG_VERSION,
 	gray,
+	HOLDS,
 	mod,
 	N_WRAP,
 	ROWS,
 	T_WRAP,
+	T2_WRAP,
 	ungray,
+	unpackRowV2,
 } from "../src/client/timecode-format.ts";
 
 const FFMPEG = process.env.FFMPEG ?? "ffmpeg";
@@ -27,8 +30,10 @@ const AMBIGUOUS = 0.25;
 /** 全振幅（基準セルの白黒の差）に対してこれより小さい組は、2つ以上のフレームが混ざったビット */
 const MIXED = 0.6;
 const MIN_CONTRAST = 24;
-const INTERP_MAX_GAP = 8;
-const INTERP_STEP_TOLERANCE = 0.25;
+/** 行0でこれより多くのビットが中間なら、範囲も出さない（候補が 2^4 = 16 を超えると幅が広すぎて使えない） */
+const MAX_MIXED_BITS = 4;
+const QR_BEFORE_MS = 100;
+const QR_AFTER_MS = 2000;
 const RELOCATE_COOLDOWN = 4;
 
 type Gray8 = { w: number; h: number; data: Uint8Array };
@@ -37,12 +42,14 @@ type Quad = [number, number][];
 export type Row = {
 	frame: number;
 	pts: number | null;
-	status: "ok" | "mixed" | "blend" | "torn" | "multi" | "unsynced" | "lowcontrast" | "nocode";
+	status: "ok" | "mixed" | "range" | "torn" | "multi" | "inconsistent" | "unsynced" | "lowcontrast" | "nocode";
+	format: 1 | 2 | null;
+	hold: number | null;
 	n16: number | null;
 	n16hi: number | null;
 	frac: number | null;
 	nT16: number | null;
-	t28: number | null;
+	tRaw: number | null;
 	synced: boolean | null;
 	verified: boolean | null;
 	slewing: boolean | null;
@@ -51,8 +58,12 @@ export type Row = {
 	nHi?: number | null;
 	nT?: number | null;
 	t?: number | null;
+	tLo?: number | null;
+	tHi?: number | null;
 	tEst?: number | null;
 };
+
+const EMPTY = { format: null, hold: null, n16: null, n16hi: null, frac: null, nT16: null, tRaw: null, synced: null, verified: null, slewing: null } as const;
 
 // ---- 幾何
 
@@ -173,9 +184,9 @@ function locate(img: Gray8): Quad[] {
 
 // ---- 読み取り
 
-type Read = Omit<Row, "frame" | "pts" | "qr">;
+type Read = Omit<Row, "frame" | "pts" | "qr"> & { raw?: { contrast: number[]; d: number[][] } };
 
-function readStrip(img: Gray8, quad: Quad): Read | null {
+function readStrip(img: Gray8, quad: Quad, hint: Hint): Read | null {
 	const map = homography(
 		[
 			[0, 0],
@@ -185,61 +196,97 @@ function readStrip(img: Gray8, quad: Quad): Read | null {
 		],
 		quad,
 	);
+	const top = Array.from({ length: COLS }, (_, c) => cell(img, map, c, 0));
+	const bottom = Array.from({ length: COLS }, (_, c) => cell(img, map, c, ROWS - 1));
 	const d: number[][] = [];
+	const contrast: number[] = [];
 	for (let r = 0; r < DATA_ROWS; r++) {
-		const white = cell(img, map, 1, r + 1);
 		const black = cell(img, map, 2, r + 1);
-		const c = white - black;
-		if (c < MIN_CONTRAST) return null;
+		const ref = cell(img, map, 1, r + 1) - black;
+		contrast.push(ref);
+		if (ref < MIN_CONTRAST) return null;
+		const f = (r + 1) / (ROWS - 1);
+		// 左端の基準セル1か所の白黒の差で割らないのは、横方向の明るさのむら（グレア・視野角）で変わらないビットまで中間に見えるため
+		const white = (c: number) => top[c] * (1 - f) + bottom[c] * f;
 		const row: number[] = [];
-		for (let i = 0; i < BITS_PER_ROW; i++) row.push((cell(img, map, 3 + 2 * i, r + 1) - cell(img, map, 4 + 2 * i, r + 1)) / c);
+		for (let i = 0; i < BITS_PER_ROW; i++) {
+			const cl = 3 + 2 * i;
+			const local = Math.max((white(cl) + white(cl + 1)) / 2 - black, MIN_CONTRAST);
+			row.push((cell(img, map, cl, r + 1) - cell(img, map, cl + 1, r + 1)) / local);
+		}
 		d.push(row);
 	}
-	return decodeRows(d);
+	return { ...decodeRows(d, hint), raw: { contrast, d } };
 }
 
-const word = (row: number[]) => row.reduce((w, v) => (w << 1) | (v > 0 ? 1 : 0), 0);
+type Hint = { hold: number | null };
 
-function decodeRows(d: number[][]): Read {
-	const empty: Read = { status: "multi", n16: null, n16hi: null, frac: null, nT16: null, t28: null, synced: null, verified: null, slewing: null };
+const word = (row: number[]) => row.reduce((w, v) => (w << 1) | (v > 0 ? 1 : 0), 0);
+const bitAt = (row: number[], lsb: number) => row[BITS_PER_ROW - 1 - lsb];
+
+/** 中間のビットを自由にした候補が1つの連続した区間（16ビットで巻き戻る）になれば、その始まりと終わり */
+function grayRange(g: number, mixed: number[]): [number, number] | null {
+	const values = new Set<number>();
+	for (let k = 0; k < 1 << mixed.length; k++) {
+		let c = g;
+		for (let j = 0; j < mixed.length; j++) {
+			const bit = 1 << (BITS_PER_ROW - 1 - mixed[j]);
+			c = k & (1 << j) ? c | bit : c & ~bit;
+		}
+		values.add(ungray(c));
+	}
+	const start = [...values].find((v) => !values.has(mod(v - 1, N_WRAP)));
+	if (start === undefined) return null;
+	for (let i = 0; i < values.size; i++) if (!values.has(mod(start + i, N_WRAP))) return null;
+	return [start, mod(start + values.size - 1, N_WRAP)];
+}
+
+function decodeRows(d: number[][], hint: Hint): Read {
+	const vBit = bitAt(d[2], 0);
+	const format: 1 | 2 | null = Math.abs(vBit) >= MIXED ? (vBit > 0 ? 2 : 1) : hint.hold !== null ? 2 : null;
+	const holdBits = [bitAt(d[2], 5), bitAt(d[2], 4)];
+	const hold = format === 2 ? (holdBits.every((v) => Math.abs(v) >= MIXED) ? HOLDS[(holdBits[0] > 0 ? 2 : 0) + (holdBits[1] > 0 ? 1 : 0)] : hint.hold) : null;
+	const empty: Read = { ...EMPTY, status: "multi", format, hold };
 	const mixed = d[0].flatMap((v, i) => (Math.abs(v) < MIXED ? [i] : []));
-	if (mixed.length > 1) return empty;
+	if (mixed.length > MAX_MIXED_BITS) return empty;
 	const g = word(d[0]);
-	let cands = [g];
-	let lo = ungray(g);
-	let hi: number | null = null;
+	const span = mixed.length ? grayRange(g, mixed) : [ungray(g), ungray(g)];
+	if (!span) return empty;
+	const [lo, hiEnd] = span;
+	const hi = mixed.length ? hiEnd : null;
 	let frac: number | null = null;
+	let cands = [g];
 	if (mixed.length === 1) {
 		const bit = 1 << (BITS_PER_ROW - 1 - mixed[0]);
-		const a = ungray(g & ~bit);
-		const b = ungray(g | bit);
-		if (mod(b - a, N_WRAP) === 1) [lo, hi] = [a, b];
-		else if (mod(a - b, N_WRAP) === 1) [lo, hi] = [b, a];
-		else return empty;
-		const hiBit = (gray(hi) & bit) !== 0;
+		const hiBit = (gray(hiEnd) & bit) !== 0;
 		const v = d[0][mixed[0]];
 		frac = Math.max(0, Math.min(1, (1 + (hiBit ? v : -v)) / 2));
-		// 多く写った方を先に試す
-		cands = frac >= 0.5 ? [gray(hi), gray(lo)] : [gray(lo), gray(hi)];
+		cands = frac >= 0.5 ? [gray(hiEnd), gray(lo)] : [gray(lo), gray(hiEnd)];
 	}
-	const base: Read = { ...empty, status: "blend", n16: lo, n16hi: hi, frac };
-	if (d.slice(1).some((row) => row.some((v) => Math.abs(v) < AMBIGUOUS))) return base;
+	const base: Read = { ...empty, status: "range", n16: lo, n16hi: hi, frac };
+	// 中間ビットが2つ以上のときに組み合わせを試して CRC で選ばないのは、候補が増えるほど偶然の一致を防げないため
+	if (mixed.length > 1 || d.slice(1).some((row) => row.some((v) => Math.abs(v) < AMBIGUOUS))) return base;
 	const [r1, r2, r3] = d.slice(1).map(word);
 	const match = cands.find((c) => crc16([c, r1, r2]) === r3);
-	if (match === undefined || r2 & FLAG_VERSION) return { ...base, status: "torn" };
-	const synced = (r2 & FLAG_SYNCED) !== 0;
+	if (match === undefined) return { ...base, status: "torn" };
+	const fields =
+		r2 & FLAG_VERSION
+			? { format: 2 as const, ...unpackRowV2(r1, r2) }
+			: { format: 1 as const, t26: r1 * 4096 + (r2 >>> 4), hold: null, synced: (r2 & FLAG_SYNCED) !== 0, verified: (r2 & FLAG_VERIFIED) !== 0, slewing: (r2 & FLAG_SLEWING) !== 0 };
 	return {
 		...base,
-		status: !synced ? "unsynced" : hi === null ? "ok" : "mixed",
+		format: fields.format,
+		hold: fields.hold,
+		status: !fields.synced ? "unsynced" : hi === null ? "ok" : "mixed",
 		nT16: ungray(match),
-		t28: synced ? r1 * 4096 + (r2 >>> 4) : null,
-		synced,
-		verified: (r2 & FLAG_VERIFIED) !== 0,
-		slewing: (r2 & FLAG_SLEWING) !== 0,
+		tRaw: fields.synced ? fields.t26 : null,
+		synced: fields.synced,
+		verified: fields.verified,
+		slewing: fields.slewing,
 	};
 }
 
-const decoded = (r: Read) => r.status === "ok" || r.status === "mixed" || r.status === "unsynced";
+const decoded = (r: Read) => r.status === "ok" || r.status === "mixed" || r.status === "unsynced" || r.status === "range";
 
 function readQr(img: Gray8): string | null {
 	const rgba = new Uint8ClampedArray(img.w * img.h * 4);
@@ -311,55 +358,68 @@ function unwrapAround(v: number, ref: number, wrap: number) {
 	return ref + mod(v - ref + wrap / 2, wrap) - wrap / 2;
 }
 
-/** 下位ビットだけの番号と時刻に上位を補い、確定していないフレームの時刻を条件付きで補間する */
+/** 下位ビットだけの値に上位を補い、範囲を時刻に直し、最新の QR と矛盾するものを捨てる */
 function finish(rows: Row[], around: number | null, sequential: boolean) {
 	// 最初のQRより前のフレームも、そのQRを基準にする（映像の冒頭はQRの読み取り間隔ぶん基準がない）
 	const first = (key: string) => (sequential ? (rows.map((r) => qrField(r.qr, key)).find((v) => v !== null) ?? null) : null);
 	let prevN = first("N");
 	let lastT = first("T");
+	let seenT: number | null = null;
 	let qr: string | null = null;
 	for (const r of rows) {
 		if (!sequential) prevN = null;
 		const qrN = qrField(r.qr, "N");
 		const qrT = qrField(r.qr, "T");
-		if ((!sequential || r.qr !== qr) && qrN !== null && r.n16 !== null) prevN = unwrapAround(r.n16, qrN, N_WRAP);
+		if (sequential && qrT !== null) lastT = qrT;
+		// 照合には、このフレームまでに実際に読めた QR だけを使う（先のフレームの QR で冒頭を補うのは上位ビットの復元のためだけ）
+		const checkT = sequential ? (seenT = qrT ?? seenT) : qrT;
+		const tRef = (sequential ? lastT : qrT) ?? around;
+		let ref: number | null;
+		if (r.format === 2) ref = tRef !== null && r.hold ? Math.floor(tRef / r.hold) : null;
+		else {
+			if ((!sequential || r.qr !== qr) && qrN !== null && r.n16 !== null) prevN = unwrapAround(r.n16, qrN, N_WRAP);
+			ref = prevN;
+		}
 		qr = r.qr;
-		const ref: number | null = prevN;
 		const un = (v: number | null): number | null => (v === null ? null : ref === null ? v : unwrapAround(v, ref, N_WRAP));
 		r.n = un(r.n16);
-		r.nHi = un(r.n16hi);
+		r.nHi = r.n16hi === null || r.n == null ? null : r.n + mod(r.n16hi - r.n16!, N_WRAP);
 		r.nT = un(r.nT16);
-		if (r.n != null) prevN = r.n;
-		if (sequential && qrT !== null) lastT = qrT;
-		const tRef = (sequential ? lastT : qrT) ?? around;
-		r.t = r.t28 === null ? null : tRef === null ? null : unwrapAround(r.t28, tRef, T_WRAP);
+		if (r.format !== 2 && r.n != null) prevN = r.n;
+		const wrap = r.format === 2 ? T2_WRAP : T_WRAP;
+		r.t = r.tRaw === null || tRef === null ? null : unwrapAround(r.tRaw, tRef, wrap);
+		if (r.format === 2 && r.hold && ref !== null && r.n != null && r.status !== "unsynced") {
+			if (r.t != null && mod(Math.floor(r.t / r.hold), N_WRAP) !== r.nT16) r.status = "inconsistent";
+			r.tLo = r.n * r.hold;
+			r.tHi = ((r.nHi ?? r.n) + 1) * r.hold;
+		}
+		if (r.t != null) {
+			r.tLo ??= r.t;
+			r.tHi ??= r.t;
+		}
+		const lo = r.tLo ?? r.t;
+		const hi = r.tHi ?? r.t;
+		const slack = 2 * (r.hold ?? 0) + QR_BEFORE_MS;
+		if (checkT !== null && lo != null && hi != null && (hi < checkT - slack || lo > checkT + QR_AFTER_MS)) r.status = "inconsistent";
+		if (r.status === "inconsistent") r.t = r.tLo = r.tHi = null;
 	}
 	if (!sequential) return;
-	const confirmed = rows.filter((r) => r.t != null && r.nT != null);
-	const steps: number[] = [];
-	for (let i = 1; i < confirmed.length; i++) {
-		const dn = confirmed[i].nT! - confirmed[i - 1].nT!;
-		if (dn > 0) steps.push((confirmed[i].t! - confirmed[i - 1].t!) / dn);
-	}
-	steps.sort((a, b) => a - b);
-	const typical = steps.length ? steps[Math.floor(steps.length / 2)] : null;
-	if (typical === null) return;
-	for (let i = 0; i < rows.length; i++) {
-		const r = rows[i];
-		if (r.t != null || r.n == null) continue;
-		const before = rows.slice(Math.max(0, i - INTERP_MAX_GAP), i).reverse().find((x) => x.t != null);
-		const after = rows.slice(i + 1, i + 1 + INTERP_MAX_GAP).find((x) => x.t != null);
+	// v1 の範囲は、前後に描かれた QR のアンカーで挟む。1回の描画間隔の下限は保証できないので、表示時刻の単調性だけを仮定する
+	const anchors = [...new Map(rows.flatMap((r) => (qrField(r.qr, "N") !== null && qrField(r.qr, "T") !== null ? [[qrField(r.qr, "N")!, qrField(r.qr, "T")!] as const] : []))).entries()].sort((a, b) => a[0] - b[0]);
+	for (const r of rows) {
+		if (r.format === 2 || r.n == null || r.status !== "range" && r.status !== "torn") continue;
+		const nHi = r.nHi ?? r.n;
+		const before = anchors.findLast(([n]) => n <= r.n!);
+		const after = anchors.find(([n]) => n >= nHi);
 		if (!before || !after) continue;
-		const pos = r.n + (r.nHi !== null && r.frac !== null ? r.frac : 0);
-		const dn = after.nT! - before.nT!;
-		if (dn <= 0 || pos < before.nT! || (r.nHi ?? r.n) > after.nT!) continue;
-		const step = (after.t! - before.t!) / dn;
-		if (Math.abs(step - typical) > typical * INTERP_STEP_TOLERANCE) continue;
-		r.tEst = before.t! + (pos - before.nT!) * step;
+		r.tLo = before[1];
+		r.tHi = after[1];
+		const mid = (r.n + nHi) / 2;
+		r.tEst = after[0] === before[0] ? before[1] : before[1] + ((mid - before[0]) * (after[1] - before[1])) / (after[0] - before[0]);
 	}
 }
 
-const HEADER = ["frame", "pts", "status", "n", "n_hi", "frac", "n_t", "t_ms", "t_iso", "t28", "t_est_ms", "synced", "verified", "slewing", "qr"];
+const HEADER = ["frame", "pts", "status", "format", "hold_ms", "n", "n_hi", "frac", "n_t", "t_ms", "t_iso", "t_lo_ms", "t_hi_ms", "t_raw", "t_est_ms", "synced", "verified", "slewing", "qr"];
 
 function csv(rows: Row[]) {
 	const v = (x: unknown) => (x === null || x === undefined ? "" : typeof x === "boolean" ? (x ? "1" : "0") : String(x));
@@ -371,13 +431,17 @@ function csv(rows: Row[]) {
 				r.frame,
 				r.pts === null ? "" : r.pts.toFixed(6),
 				r.status,
+				r.format,
+				r.hold,
 				r.n,
 				r.nHi,
 				r.frac === null ? null : r.frac.toFixed(3),
 				r.nT,
 				r.t,
 				r.t == null ? null : new Date(r.t).toISOString(),
-				r.t28,
+				r.tLo,
+				r.tHi,
+				r.tRaw,
 				r.tEst == null ? null : r.tEst.toFixed(1),
 				r.synced,
 				r.verified,
@@ -393,7 +457,7 @@ function csv(rows: Row[]) {
 
 function parseArgs(argv: string[]) {
 	const files: string[] = [];
-	const o = { out: null as string | null, corners: null as Quad | null, around: null as number | null, qrEvery: 5 };
+	const o = { dump: null as string | null, out: null as string | null, corners: null as Quad | null, around: null as number | null, qrEvery: 5 };
 	for (let i = 0; i < argv.length; i++) {
 		const a = argv[i];
 		if (a === "--out") o.out = argv[++i];
@@ -404,7 +468,8 @@ function parseArgs(argv: string[]) {
 		} else if (a === "--around") {
 			const s = argv[++i];
 			o.around = /^\d+$/.test(s) ? Number(s) : Date.parse(s);
-		} else if (a === "--qr-every") o.qrEvery = Math.max(1, Number(argv[++i]));
+		} else if (a === "--dump") o.dump = argv[++i];
+		else if (a === "--qr-every") o.qrEvery = Math.max(1, Number(argv[++i]));
 		else files.push(a);
 	}
 	return { files, ...o };
@@ -414,6 +479,7 @@ export async function decode(argv: string[]) {
 	const opt = parseArgs(argv);
 	if (!opt.files.length) throw new Error("usage: node tools/decode-timecode.ts <video|image...> [--out out.csv] [--corners x,y,...] [--around ISO|ms] [--qr-every n]");
 	const all: Row[] = [];
+	if (opt.dump) writeFileSync(opt.dump, "");
 	let sequential = true;
 	for (const file of opt.files) {
 		const { w, h, image } = probe(file);
@@ -422,13 +488,14 @@ export async function decode(argv: string[]) {
 		let qr: string | null = null;
 		let sinceQr = Number.POSITIVE_INFINITY;
 		let cooldown = 0;
+		const hint = (): Hint => ({ hold: qrField(qr, "G") });
 		const rows: Row[] = [];
 		const pts = await frames(file, w, h, (img, index) => {
-			let read: Read | null = quad ? readStrip(img, quad) : null;
+			let read: Read | null = quad ? readStrip(img, quad, hint()) : null;
 			let status: Row["status"] = "nocode";
 			if (!read && !opt.corners) {
 				for (const q of locate(img)) {
-					read = readStrip(img, q);
+					read = readStrip(img, q, hint());
 					if (read) {
 						quad = q;
 						break;
@@ -439,7 +506,7 @@ export async function decode(argv: string[]) {
 			else if (!decoded(read) && !opt.corners && cooldown-- <= 0) {
 				// 混ざったフレームは位置が合っていても読めないので、探し直して見つからなければ数フレームは探さない（全画面の連結成分探索は重い）
 				const better = locate(img)
-					.map((q) => ({ q, r: readStrip(img, q) }))
+					.map((q) => ({ q, r: readStrip(img, q, hint()) }))
 					.find((x) => x.r && decoded(x.r));
 				if (better) {
 					quad = better.q;
@@ -455,9 +522,10 @@ export async function decode(argv: string[]) {
 			rows.push({
 				frame: all.length + rows.length,
 				pts: null,
-				...(read ?? { status, n16: null, n16hi: null, frac: null, nT16: null, t28: null, synced: null, verified: null, slewing: null }),
+				...(read ?? { ...EMPTY, status }),
 				qr,
 			});
+			if (opt.dump) appendFileSync(opt.dump, `${JSON.stringify({ frame: all.length + rows.length - 1, status: read?.status ?? status, ...read?.raw })}\n`);
 		});
 		for (let i = 0; i < rows.length; i++) rows[i].pts = image ? null : (pts[i] ?? null);
 		all.push(...rows);
