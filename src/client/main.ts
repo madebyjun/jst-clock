@@ -1,3 +1,4 @@
+import { startBackground } from "./bg.ts";
 import { Clock, mono } from "./clock.ts";
 import { setupControls } from "./controls.ts";
 import { applyStatic, lang, msg, redirecting } from "./i18n.ts";
@@ -240,6 +241,7 @@ document.addEventListener("visibilitychange", () => {
 async function start() {
 	keepAwake();
 	await burst();
+	startBackground();
 	setInterval(() => clock.round().then(renderStatus), ROUND_INTERVAL_MS);
 }
 

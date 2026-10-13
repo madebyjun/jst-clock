@@ -21,6 +21,12 @@
 		--ok: #46c98a;
 		--warn: #e8b040;
 		--bad: #ff6464;
+		/* 背景のインク。数字のコントラストを削らないよう、どれも輝度の低い藍・菫と、--bad の赤をごく暗くしたもの */
+		--bg-ink-1: #2a1f6e;
+		--bg-ink-2: #44206e;
+		--bg-ink-3: #182a6a;
+		--bg-ink-4: #6a1830;
+		--bg-grain-opacity: .55;
 		--mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
 		color-scheme: dark;
 	}
@@ -30,6 +36,10 @@
 		display: grid; place-items: center; padding-inline: 16px; box-sizing: border-box;
 		padding-block: env(safe-area-inset-top, 0px) env(safe-area-inset-bottom, 0px);
 	}
+	#bg { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
+	#bg canvas { width: 100%; height: 100%; display: block; }
+	#bg canvas.static { filter: blur(40px); transform: scale(1.1); }
+	#bg::after { content: ""; position: absolute; inset: 0; background-image: var(--bg-grain, none); opacity: var(--bg-grain-opacity); }
 	main { width: min(100%, 1400px); display: grid; gap: clamp(12px, 2.2vw, 36px); min-width: 0; grid-template-columns: minmax(0, 1fr); padding-block: 12px; min-height: 100svh; box-sizing: border-box; align-content: start; }
 	header { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px 12px; font-size: 13px; color: var(--dim); }
 	header input, header select, header button, dialog input, dialog button {
