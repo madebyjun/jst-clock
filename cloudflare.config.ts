@@ -10,8 +10,11 @@ export default defineConfig({
 		env: {
 			ASSETS: bindings.assets(),
 			// リクエストのオリジンだけで決めないのは、独自ドメインを付けた後に workers.dev 側も別のページとして登録されるのを防ぐため。空のあいだはリクエストのオリジンを使う
-			SITE_ORIGIN: bindings.text(""),
+			SITE_ORIGIN: bindings.text("https://milliclock.com"),
 		},
+		domains: ["milliclock.com", "www.milliclock.com"],
+		// 明示しないと独自ドメインを付けた時点で workers.dev が無効になり、旧URLからの 301 転送が届かなくなるため
+		workersDev: true,
 		assets: {
 			notFoundHandling: "none",
 			// "/*" にしないのは、JS・CSS まで Worker を通すと起動のたびに無駄な呼び出しが増えるため。HTML を返すパスだけを Worker に回す

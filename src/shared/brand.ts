@@ -1,1 +1,1 @@
-export const PRODUCT_NAME = "ms clock";
+export const PRODUCT_NAME = "Milliclock";
