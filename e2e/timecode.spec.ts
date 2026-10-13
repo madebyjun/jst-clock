@@ -617,3 +617,75 @@ test("実機の映像（120Hz の液晶を iPhone で撮影）から、ほぼ全
 		expect(r.backwards, r.video).toBe(0);
 	}
 });
+
+test("v1 の範囲を後の QR アンカーで埋めたあとも、そのフレームの QR と矛盾する範囲は捨てる（Codex の再現）", async ({ page }, info) => {
+	await open(page);
+	const base = 1_760_000_000_000;
+	const dir = `${DIR}/v1-anchor-${info.project.name}`;
+	mkdirSync(dir, { recursive: true });
+	const shots = [
+		{ name: "anchor60", frames: [{ n: 60, t: base + 500 }], anchor: { n: 60, t: base + 500 }, flip: false },
+		// 64 と 65 が半々に混ざり、行0のビット8だけを確信を持って誤読した（白黒を入れ替えた）フレーム。QR はまだ n=60 のアンカー
+		{ name: "smear-flip", frames: [{ n: 64, t: base + 567 }, { n: 65, t: base + 575 }], anchor: { n: 60, t: base + 500 }, flip: true },
+		{ name: "anchor440", frames: [{ n: 440, t: base + 4000 }], anchor: { n: 440, t: base + 4000 }, flip: false },
+		{ name: "anchor450", frames: [{ n: 450, t: base + 4500 }], anchor: { n: 450, t: base + 4500 }, flip: false },
+	];
+	for (const [i, s] of shots.entries()) {
+		await page.evaluate((s) => {
+			const strip = document.querySelector<HTMLCanvasElement>("#timecode .tc-strip")!;
+			const ctx = strip.getContext("2d")!;
+			const imgs = s.frames.map((f) => {
+				window.__timecode.renderAt(f.t, f.n, s.anchor, 1);
+				return ctx.getImageData(0, 0, strip.width, strip.height);
+			});
+			const out = imgs[0];
+			for (let p = 0; p < out.data.length; p++) out.data[p] = Math.round(imgs.reduce((sum, img) => sum + img.data[p], 0) / imgs.length);
+			ctx.putImageData(out, 0, 0);
+			if (s.flip) {
+				// 行0（モジュール行2+1）のビット8 は上位から7番目の組。左右のセルの色を入れ替える
+				const m = strip.width / 40;
+				const y = (2 + 1) * m;
+				const xl = (2 + 3 + 2 * 7) * m;
+				const left = ctx.getImageData(xl, y, m, m);
+				const right = ctx.getImageData(xl + m, y, m, m);
+				ctx.putImageData(right, xl, y);
+				ctx.putImageData(left, xl + m, y);
+			}
+		}, s);
+		await page.screenshot({ path: `${dir}/${String(i).padStart(2, "0")}.png` });
+	}
+	const video = `${DIR}/${info.project.name}-v1-anchor.mkv`;
+	execFileSync(process.env.FFMPEG ?? "ffmpeg", ["-v", "error", "-y", "-framerate", "10", "-i", `${dir}/%02d.png`, "-c:v", "ffv1", "-pix_fmt", "gray", video]);
+	const rows = decode([video], `${DIR}/${info.project.name}-v1-anchor.csv`, ["--qr-every", "1"]);
+	save(`${info.project.name}-timecode-v1-anchor`, rows.map((r) => ({ status: r.status, n: r.n, n_hi: r.n_hi, t_lo: r.t_lo_ms, t_hi: r.t_hi_ms, t_est: r.t_est_ms, qr: r.qr })));
+	const smear = rows[1];
+	// 誤読したビットのせいで番号は 446〜447 のように遠くへ飛ぶ。そのとき見えている QR（T = base+500）から 2 秒を超える範囲は出さない
+	expect(smear.n).not.toBeNull();
+	expect(smear.status).toBe("inconsistent");
+	expect(smear.t_lo_ms).toBeNull();
+	expect(smear.t_hi_ms).toBeNull();
+	expect(smear.t_est_ms).toBeNull();
+	for (const r of rows) if (r.t_hi_ms !== null) expect(r.t_lo_ms!).toBeLessThanOrEqual(/ T(\d+) /.exec(r.qr) ? Number(/ T(\d+) /.exec(r.qr)![1]) + 2000 : Number.POSITIVE_INFINITY);
+});
+
+test("v2 で QR が読めず --around が2時間ずれていても、CRC で確かめた時刻から q の上位を決める（Codex の再現）", async ({ page }, info) => {
+	await open(page);
+	const hold = await page.evaluate(() => window.__timecode.hold());
+	const t = 1_760_000_000_123;
+	await page.evaluate((t) => {
+		window.__timecode.renderAt(t, 1);
+		document.querySelector<HTMLCanvasElement>("#timecode .tc-qr")!.style.visibility = "hidden";
+	}, t);
+	mkdirSync(DIR, { recursive: true });
+	const f = `${DIR}/${info.project.name}-v2-around.png`;
+	await page.screenshot({ path: f });
+	const [r] = decode([f], `${DIR}/${info.project.name}-v2-around.csv`, ["--around", String(t - 2 * 3600_000)]);
+	save(`${info.project.name}-timecode-v2-around`, r);
+	expect(r.qr).toBe("");
+	expect(r.status).toBe("ok");
+	expect(r.t_ms).toBe(t);
+	expect(r.n_t).toBe(Math.floor(t / hold));
+	expect(r.n).toBe(Math.floor(t / hold));
+	expect(r.t_lo_ms!).toBeLessThanOrEqual(t);
+	expect(r.t_hi_ms!).toBeGreaterThan(t);
+});

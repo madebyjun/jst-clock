@@ -33,6 +33,7 @@ const MIN_CONTRAST = 24;
 /** 行0でこれより多くのビットが中間なら、範囲も出さない（候補が 2^4 = 16 を超えると幅が広すぎて使えない） */
 const MAX_MIXED_BITS = 4;
 const QR_BEFORE_MS = 100;
+const V1_SMEAR = 8;
 const QR_AFTER_MS = 2000;
 const RELOCATE_COOLDOWN = 4;
 
@@ -359,6 +360,15 @@ function unwrapAround(v: number, ref: number, wrap: number) {
 }
 
 /** 下位ビットだけの値に上位を補い、範囲を時刻に直し、最新の QR と矛盾するものを捨てる */
+/** 範囲や時刻が、そのフレームまでに読めた最新の QR の T と矛盾すれば捨てる */
+function checkAgainstQr(r: Row, checkT: number | null) {
+	const lo = Math.min(r.tLo ?? r.t ?? Number.POSITIVE_INFINITY, r.tEst ?? Number.POSITIVE_INFINITY);
+	const hi = Math.max(r.tHi ?? r.t ?? Number.NEGATIVE_INFINITY, r.tEst ?? Number.NEGATIVE_INFINITY);
+	const slack = 2 * (r.hold ?? 0) + QR_BEFORE_MS;
+	if (checkT !== null && Number.isFinite(lo) && Number.isFinite(hi) && (hi < checkT - slack || lo > checkT + QR_AFTER_MS)) r.status = "inconsistent";
+	if (r.status === "inconsistent") r.t = r.tLo = r.tHi = r.tEst = null;
+}
+
 function finish(rows: Row[], around: number | null, sequential: boolean) {
 	// 最初のQRより前のフレームも、そのQRを基準にする（映像の冒頭はQRの読み取り間隔ぶん基準がない）
 	const first = (key: string) => (sequential ? (rows.map((r) => qrField(r.qr, key)).find((v) => v !== null) ?? null) : null);
@@ -366,6 +376,7 @@ function finish(rows: Row[], around: number | null, sequential: boolean) {
 	let lastT = first("T");
 	let seenT: number | null = null;
 	let qr: string | null = null;
+	const checks: (number | null)[] = [];
 	for (const r of rows) {
 		if (!sequential) prevN = null;
 		const qrN = qrField(r.qr, "N");
@@ -373,9 +384,13 @@ function finish(rows: Row[], around: number | null, sequential: boolean) {
 		if (sequential && qrT !== null) lastT = qrT;
 		// 照合には、このフレームまでに実際に読めた QR だけを使う（先のフレームの QR で冒頭を補うのは上位ビットの復元のためだけ）
 		const checkT = sequential ? (seenT = qrT ?? seenT) : qrT;
+		checks.push(checkT);
 		const tRef = (sequential ? lastT : qrT) ?? around;
+		const wrap = r.format === 2 ? T2_WRAP : T_WRAP;
+		r.t = r.tRaw === null || tRef === null ? null : unwrapAround(r.tRaw, tRef, wrap);
 		let ref: number | null;
-		if (r.format === 2) ref = tRef !== null && r.hold ? Math.floor(tRef / r.hold) : null;
+		// CRC で確かめた時刻があれば、行0の上位ビットはその時刻から決める。基準（QR や --around）が離れていても q を取り違えないため
+		if (r.format === 2) ref = r.hold ? (r.t != null ? Math.floor(r.t / r.hold) : tRef !== null ? Math.floor(tRef / r.hold) : null) : null;
 		else {
 			if ((!sequential || r.qr !== qr) && qrN !== null && r.n16 !== null) prevN = unwrapAround(r.n16, qrN, N_WRAP);
 			ref = prevN;
@@ -386,29 +401,31 @@ function finish(rows: Row[], around: number | null, sequential: boolean) {
 		r.nHi = r.n16hi === null || r.n == null ? null : r.n + mod(r.n16hi - r.n16!, N_WRAP);
 		r.nT = un(r.nT16);
 		if (r.format !== 2 && r.n != null) prevN = r.n;
-		const wrap = r.format === 2 ? T2_WRAP : T_WRAP;
-		r.t = r.tRaw === null || tRef === null ? null : unwrapAround(r.tRaw, tRef, wrap);
 		if (r.format === 2 && r.hold && ref !== null && r.n != null && r.status !== "unsynced") {
-			if (r.t != null && mod(Math.floor(r.t / r.hold), N_WRAP) !== r.nT16) r.status = "inconsistent";
 			r.tLo = r.n * r.hold;
 			r.tHi = ((r.nHi ?? r.n) + 1) * r.hold;
+			if (r.t != null && (Math.floor(r.t / r.hold) !== r.nT || r.t < r.tLo || r.t >= r.tHi)) r.status = "inconsistent";
 		}
 		if (r.t != null) {
 			r.tLo ??= r.t;
 			r.tHi ??= r.t;
 		}
-		const lo = r.tLo ?? r.t;
-		const hi = r.tHi ?? r.t;
-		const slack = 2 * (r.hold ?? 0) + QR_BEFORE_MS;
-		if (checkT !== null && lo != null && hi != null && (hi < checkT - slack || lo > checkT + QR_AFTER_MS)) r.status = "inconsistent";
-		if (r.status === "inconsistent") r.t = r.tLo = r.tHi = null;
+		checkAgainstQr(r, checkT);
 	}
 	if (!sequential) return;
 	// v1 の範囲は、前後に描かれた QR のアンカーで挟む。1回の描画間隔の下限は保証できないので、表示時刻の単調性だけを仮定する
 	const anchors = [...new Map(rows.flatMap((r) => (qrField(r.qr, "N") !== null && qrField(r.qr, "T") !== null ? [[qrField(r.qr, "N")!, qrField(r.qr, "T")!] as const] : []))).entries()].sort((a, b) => a[0] - b[0]);
 	for (const r of rows) {
-		if (r.format === 2 || r.n == null || r.status !== "range" && r.status !== "torn") continue;
+		if (r.format === 2 || r.n == null || r.status === "inconsistent") continue;
 		const nHi = r.nHi ?? r.n;
+		// 見えている QR のアンカーより前の番号や、次のアンカーより先の番号は、このフレームには写りえない（にじみの分だけ余裕を持つ）
+		const shownN = qrField(r.qr, "N");
+		const nextN = shownN === null ? undefined : anchors.find(([n]) => n > shownN)?.[0];
+		if (shownN !== null && (nHi < shownN - V1_SMEAR || (nextN !== undefined && r.n > nextN + V1_SMEAR))) {
+			r.status = "inconsistent";
+			continue;
+		}
+		if (r.status !== "range" && r.status !== "torn") continue;
 		const before = anchors.findLast(([n]) => n <= r.n!);
 		const after = anchors.find(([n]) => n >= nHi);
 		if (!before || !after) continue;
@@ -417,6 +434,8 @@ function finish(rows: Row[], around: number | null, sequential: boolean) {
 		const mid = (r.n + nHi) / 2;
 		r.tEst = after[0] === before[0] ? before[1] : before[1] + ((mid - before[0]) * (after[1] - before[1])) / (after[0] - before[0]);
 	}
+	// アンカーで埋めた範囲も照合し直す（埋める前の照合では、まだ範囲がなかった）
+	rows.forEach((r, i) => checkAgainstQr(r, checks[i]));
 }
 
 const HEADER = ["frame", "pts", "status", "format", "hold_ms", "n", "n_hi", "frac", "n_t", "t_ms", "t_iso", "t_lo_ms", "t_hi_ms", "t_raw", "t_est_ms", "synced", "verified", "slewing", "qr"];
@@ -514,11 +533,11 @@ export async function decode(argv: string[]) {
 					cooldown = 0;
 				} else cooldown = RELOCATE_COOLDOWN;
 			}
-			if (image || sinceQr >= opt.qrEvery || (read && read.status !== "ok" && read.status !== "mixed")) {
+			if (image || ++sinceQr >= opt.qrEvery || (read && read.status !== "ok" && read.status !== "mixed")) {
 				const q = readQr(img);
 				if (q) qr = q;
 				sinceQr = 0;
-			} else sinceQr++;
+			}
 			rows.push({
 				frame: all.length + rows.length,
 				pts: null,
