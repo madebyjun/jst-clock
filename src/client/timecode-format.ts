@@ -65,3 +65,30 @@ export function modules(words: number[]): boolean[][] {
 	}
 	return grid;
 }
+
+// ---- v2：値を保持時間ごとにだけ変える。行0は時刻の目盛り q = floor(t0 / hold) のグレイコード
+
+export const HOLDS = [25, 50, 100, 200] as const;
+export type Hold = (typeof HOLDS)[number];
+export const T2_WRAP = 2 ** 26;
+
+export type HeldFrame = { t0: number | null; q: number; hold: Hold; verified: boolean; slewing: boolean };
+
+export function packRowsV2(f: HeldFrame): number[] {
+	const g = gray(mod(f.q, N_WRAP));
+	const tl = f.t0 === null ? 0 : mod(Math.floor(f.t0), T2_WRAP);
+	const flags = ((f.t0 === null ? 0 : 1) << 2) | ((f.verified ? 1 : 0) << 1) | (f.slewing ? 1 : 0);
+	const r1 = Math.floor(tl / 1024);
+	const r2 = ((tl % 1024) << 6) | (HOLDS.indexOf(f.hold) << 4) | (flags << 1) | FLAG_VERSION;
+	return [g, r1, r2, crc16([g, r1, r2])];
+}
+
+export function unpackRowV2(r1: number, r2: number) {
+	return {
+		t26: r1 * 1024 + (r2 >>> 6),
+		hold: HOLDS[(r2 >>> 4) & 3],
+		synced: ((r2 >>> 3) & 1) === 1,
+		verified: ((r2 >>> 2) & 1) === 1,
+		slewing: ((r2 >>> 1) & 1) === 1,
+	};
+}
