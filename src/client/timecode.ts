@@ -150,22 +150,26 @@ export function mountTimecode(container: HTMLElement, clock: Clock, zoneOffset: 
 		/** 数字と同じ rAF の中で、数字と同じ時刻 t（表示予測時刻 at に対する clock.now の値）を渡す */
 		frame(t: number | null, at: number, frameMs: number, lag: number) {
 			if (!enabled || frozen) return;
-			n++;
-			const key = Math.floor((t ?? at) / QR_PERIOD_MS);
-			// 毎描画で値を変えると、応答の遅いパネル（120Hz の液晶など）では落ち着く前に次の値になり、どのフレームも読めなくなる
-			const q = Math.floor((t ?? at) / hold);
-			if (q === lastQ && key === qrKey) return;
-			const meta = snapshot(clock, t, at, frameMs, lag, zoneMinutes(t ?? at), hold);
-			if (q !== lastQ) {
-				drawHeld(t, q, meta);
-				log.push({ n: q, t: t === null ? null : Math.floor(t) });
-				if (log.length > LOG_MAX) log.splice(0, log.length - LOG_MAX);
-				lastQ = q;
-			}
-			if (key !== qrKey) drawAnchor({ n, t }, meta);
-			qrKey = key;
+			advance(t, at, frameMs, lag);
 		},
 	};
+
+	function advance(t: number | null, at: number, frameMs: number, lag: number) {
+		n++;
+		const key = Math.floor((t ?? at) / QR_PERIOD_MS);
+		// 毎描画で値を変えると、応答の遅いパネル（120Hz の液晶など）では落ち着く前に次の値になり、どのフレームも読めなくなる
+		const q = Math.floor((t ?? at) / hold);
+		if (q === lastQ && key === qrKey) return;
+		const meta = snapshot(clock, t, at, frameMs, lag, zoneMinutes(t ?? at), hold);
+		if (q !== lastQ) {
+			drawHeld(t, q, meta);
+			log.push({ n: q, t: t === null ? null : Math.floor(t) });
+			if (log.length > LOG_MAX) log.splice(0, log.length - LOG_MAX);
+			lastQ = q;
+		}
+		if (key !== qrKey) drawAnchor({ n, t }, meta);
+		qrKey = key;
+	}
 
 	window.__timecode = {
 		renderAt(t: number | null, frameN: number, anchor?: Anchor, format: 1 | 2 = 2, deviceAt = mono()) {
@@ -178,6 +182,14 @@ export function mountTimecode(container: HTMLElement, clock: Clock, zoneOffset: 
 			}
 		},
 		hold: () => hold,
+		drive(times: number[], frameMs: number) {
+			// 実際の rAF に任せると描画の間隔が環境で揺れるので、決まった時刻の列で描き直しの規則だけを確かめる
+			frozen = null;
+			lastQ = qrKey = Number.NaN;
+			const from = log.length;
+			for (const t of times) advance(t, t, frameMs, 0);
+			return log.slice(from);
+		},
 		live() {
 			frozen = null;
 			qrKey = Number.NaN;
@@ -196,6 +208,7 @@ declare global {
 			/** format 2（既定）は保持型で、行0は floor(t / hold)。n は QR のアンカーにだけ使う。format 1 は描画ごとの旧形式 */
 			renderAt: (t: number | null, n: number, anchor?: { n: number; t: number | null }, format?: 1 | 2, at?: number) => void;
 			hold: () => number;
+			drive: (times: number[], frameMs: number) => { n: number; t: number | null }[];
 			live: () => void;
 			/** 時刻帯を描き直した記録。n は行0の値（v2 では floor(t / hold)） */
 			log: () => { n: number; t: number | null }[];

@@ -239,9 +239,12 @@ test("実際のページを録画した映像から、ページが描いた時�
 		const hold = await (async () => Number(/ G(\d+) /.exec(got[0].qr)![1]))();
 		const synced = log.filter((e) => e.t !== null);
 		const frameMs = Number(/ F([\d.]+) /.exec(got[got.length - 1].qr)![1]);
-		// 値は保持時間の区切りをまたいだ最初のフレームで描き直す。描き直しが区切りから大きく遅れていない＝ページは止まらず描いている
+		// 値は保持時間の区切りをまたいだ最初のフレームで描き直すので、t₀ は必ず [q·H, (q+1)·H) に入る
 		const pageStep = Math.max(...synced.map((e) => e.t! - e.n * hold));
-		const skipped = synced.slice(1).filter((e, i) => e.n !== synced[i].n + 1).length;
+		// rAF が保持時間より長く止まれば区切りを飛ばすのは仕様（q は時刻の目盛り）。飛ばしたのは、描画の間隔が H を超えたときだけであること
+		const skips = synced.slice(1).flatMap((e, i) => (e.n !== synced[i].n + 1 ? [{ from: synced[i], to: e, gapMs: e.t! - synced[i].t! }] : []));
+		const skipped = skips.length;
+		const unexplainedSkips = skips.filter((k) => k.gapMs <= hold).length;
 		const maxGapMs = Math.max(...got.slice(1).map((r, i) => r.t_ms! - got[i].t_ms!));
 		const result = {
 			videoFrames: rows.length,
@@ -258,6 +261,7 @@ test("実際のページを録画した映像から、ページが描いた時�
 			holdMs: hold,
 			maxRedrawLateMs: pageStep,
 			skippedValues: skipped,
+			skips,
 			drawLogFrom: startLen,
 			digits,
 		};
@@ -270,9 +274,9 @@ test("実際のページを録画した映像から、ページが描いた時�
 		expect(unknown.length).toBe(0);
 		expect(backwards).toBe(0);
 		// ページ自身は毎フレーム途切れずに描いている（録画の隙間はページではなく取り込み側の取りこぼし）
-		expect(pageStep).toBeGreaterThanOrEqual(0);
-		expect(pageStep).toBeLessThan(frameMs * 3);
-		expect(skipped).toBe(0);
+		expect(Math.min(...synced.map((e) => e.t! - e.n * hold))).toBeGreaterThanOrEqual(0);
+		expect(pageStep).toBeLessThan(hold);
+		expect(unexplainedSkips).toBe(0);
 		// 録画は約25fpsで、並列実行中は取り込みが数百ms止まることがある。保持時間 + 1表示フレーム + 録画の揺らぎ（300ms）以内
 		expect(frameMs).toBeGreaterThan(4);
 		expect(frameMs).toBeLessThan(60);
@@ -736,4 +740,32 @@ test("未同期の値がにじんだフレームには、時刻の範囲を付�
 		expect(valid.t_ms).toBe(base + 500);
 	}
 	save(`${info.project.name}-timecode-unsynced`, results);
+});
+
+test("決まった時刻の列で描くと、保持時間の区切りごとに1回だけ描き直し、描画が止まったときだけ区切りを飛ばす", async ({ page }, info) => {
+	await open(page);
+	const hold = await page.evaluate(() => window.__timecode.hold());
+	const base = Math.floor(1_760_000_000_000 / hold) * hold;
+	const frame = 1000 / 120;
+	const steady = Array.from({ length: 240 }, (_, k) => base + 1 + k * frame);
+	// 途中で 250ms 止まる（保持時間の区切りを2つ以上またぐ）
+	const stalled = [...steady.slice(0, 50), ...steady.slice(80)];
+	const r = await page.evaluate(({ steady, stalled, frame }) => ({ steady: window.__timecode.drive(steady, frame), stalled: window.__timecode.drive(stalled, frame) }), { steady, stalled, frame });
+	const check = (log: { n: number; t: number | null }[]) => ({
+		values: log.length,
+		skips: log.slice(1).filter((e, i) => e.n !== log[i].n + 1).map((e, i) => ({ to: e.n, gapMs: e.t! - log[log.indexOf(e) - 1].t! })),
+		late: Math.max(...log.map((e) => e.t! - e.n * hold)),
+		first: log.every((e) => Math.floor(e.t! / hold) === e.n),
+	});
+	const result = { steady: check(r.steady), stalled: check(r.stalled) };
+	save(`${info.project.name}-timecode-drive`, result);
+	// 止まらなければ、区切りを1つも飛ばさず、各値は区切りをまたいだ最初のフレーム（1フレーム以内）で描かれる
+	expect(result.steady.skips).toEqual([]);
+	expect(result.steady.values).toBe(Math.floor(steady.at(-1)! / hold) - Math.floor(steady[0] / hold) + 1);
+	expect(result.steady.late).toBeLessThan(frame);
+	expect(result.steady.first).toBe(true);
+	// 止まったときは飛ばしてよいが、飛ばしたのは止まった間だけ
+	expect(result.stalled.skips.length).toBeGreaterThan(0);
+	for (const k of result.stalled.skips) expect(k.gapMs).toBeGreaterThan(hold);
+	expect(result.stalled.first).toBe(true);
 });
