@@ -1,4 +1,6 @@
-# jst-clock
+# Milliclock
+
+https://milliclock.com （リポジトリ名と Worker 名は jst-clock のまま）
 
 撮影した映像の時刻ずれを測るための、ミリ秒まで表示する日本標準時の時計。カメラで画面ごと撮影して、映像のタイムコードや別の時計と比べる用途を想定している。
 

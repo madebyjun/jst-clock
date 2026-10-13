@@ -25,5 +25,6 @@ export default defineConfig({
 	plugins: [cloudflare()],
 	define: { __CONTENT_DATE__: JSON.stringify(contentDate()), __APP_VERSION__: JSON.stringify(version()) },
 	server: { port: Number(process.env.PORT) || 5173, strictPort: true },
-	preview: { port: Number(process.env.PORT) || 4173, strictPort: true },
+	// 本番のホスト名を受け付けるのは、www と workers.dev からの転送をローカルで試験するため
+	preview: { port: Number(process.env.PORT) || 4173, strictPort: true, allowedHosts: ["www.milliclock.com", ".workers.dev"] },
 });

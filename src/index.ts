@@ -194,6 +194,10 @@ export default {
 	async fetch(request, env) {
 		const url = new URL(request.url);
 		if (url.pathname === "/api/time") return time(request);
+		// 正規のドメイン以外は「どのホストでも」ではなく名指しで転送する。ローカルのプレビューや試験まで本番へ飛ばさないため
+		if (env.SITE_ORIGIN && (url.hostname.startsWith("www.") || url.hostname.endsWith(".workers.dev"))) {
+			return Response.redirect(env.SITE_ORIGIN.replace(/\/$/, "") + url.pathname + url.search, 301);
+		}
 		if (url.pathname === "/robots.txt") return robots(siteOrigin(url, env));
 		if (url.pathname === "/sitemap.xml") return sitemap(siteOrigin(url, env));
 		if (url.pathname === "/site.webmanifest") return manifest();
