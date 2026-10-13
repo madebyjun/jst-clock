@@ -247,7 +247,10 @@ function decodeRows(d: number[][], hint: Hint): Read {
 	const format: 1 | 2 | null = Math.abs(vBit) >= MIXED ? (vBit > 0 ? 2 : 1) : hint.hold !== null ? 2 : null;
 	const holdBits = [bitAt(d[2], 5), bitAt(d[2], 4)];
 	const hold = format === 2 ? (holdBits.every((v) => Math.abs(v) >= MIXED) ? HOLDS[(holdBits[0] > 0 ? 2 : 0) + (holdBits[1] > 0 ? 1 : 0)] : hint.hold) : null;
-	const empty: Read = { ...EMPTY, status: "multi", format, hold };
+	// 同期済みのビットも版・保持時間と同じく変わらない値なので、時刻の行がにじんでも個別に読める。読めなければ「分からない」とし、同期済みとはみなさない
+	const syncedBit = bitAt(d[2], 3);
+	const synced = Math.abs(syncedBit) >= MIXED ? syncedBit > 0 : null;
+	const empty: Read = { ...EMPTY, status: "multi", format, hold, synced };
 	const mixed = d[0].flatMap((v, i) => (Math.abs(v) < MIXED ? [i] : []));
 	if (mixed.length > MAX_MIXED_BITS) return empty;
 	const g = word(d[0]);
@@ -264,7 +267,7 @@ function decodeRows(d: number[][], hint: Hint): Read {
 		frac = Math.max(0, Math.min(1, (1 + (hiBit ? v : -v)) / 2));
 		cands = frac >= 0.5 ? [gray(hiEnd), gray(lo)] : [gray(lo), gray(hiEnd)];
 	}
-	const base: Read = { ...empty, status: "range", n16: lo, n16hi: hi, frac };
+	const base: Read = { ...empty, status: synced === false ? "unsynced" : "range", n16: lo, n16hi: hi, frac };
 	// 中間ビットが2つ以上のときに組み合わせを試して CRC で選ばないのは、候補が増えるほど偶然の一致を防げないため
 	if (mixed.length > 1 || d.slice(1).some((row) => row.some((v) => Math.abs(v) < AMBIGUOUS))) return base;
 	const [r1, r2, r3] = d.slice(1).map(word);
@@ -401,7 +404,8 @@ function finish(rows: Row[], around: number | null, sequential: boolean) {
 		r.nHi = r.n16hi === null || r.n == null ? null : r.n + mod(r.n16hi - r.n16!, N_WRAP);
 		r.nT = un(r.nT16);
 		if (r.format !== 2 && r.n != null) prevN = r.n;
-		if (r.format === 2 && r.hold && ref !== null && r.n != null && r.status !== "unsynced") {
+		// 未同期の行0は補正前の端末の時計から作った値なので、同期済みと確かめられたときだけ時刻に直す（T11）
+		if (r.format === 2 && r.hold && ref !== null && r.n != null && r.synced === true) {
 			r.tLo = r.n * r.hold;
 			r.tHi = ((r.nHi ?? r.n) + 1) * r.hold;
 			if (r.t != null && (Math.floor(r.t / r.hold) !== r.nT || r.t < r.tLo || r.t >= r.tHi)) r.status = "inconsistent";
@@ -425,7 +429,8 @@ function finish(rows: Row[], around: number | null, sequential: boolean) {
 			r.status = "inconsistent";
 			continue;
 		}
-		if (r.status !== "range" && r.status !== "torn") continue;
+		// v1 の範囲はこのフレームの値ではなく、同期済みの前後のアンカーと表示の順序から決まるので、同期済みのビットが読めなくても付けてよい。未同期と読めたものには付けない
+		if ((r.status !== "range" && r.status !== "torn") || r.synced === false) continue;
 		const before = anchors.findLast(([n]) => n <= r.n!);
 		const after = anchors.find(([n]) => n >= nHi);
 		if (!before || !after) continue;

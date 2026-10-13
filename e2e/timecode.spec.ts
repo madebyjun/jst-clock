@@ -689,3 +689,51 @@ test("v2 で QR が読めず --around が2時間ずれていても、CRC で確�
 	expect(r.t_lo_ms!).toBeLessThanOrEqual(t);
 	expect(r.t_hi_ms!).toBeGreaterThan(t);
 });
+
+test("未同期の値がにじんだフレームには、時刻の範囲を付けない（端末の時計を正しい時刻として返さない、Codex の再現）", async ({ page }, info) => {
+	await open(page);
+	const hold = await page.evaluate(() => window.__timecode.hold());
+	const base = Math.floor(1_760_000_000_000 / hold) * hold;
+	// 時刻源が全部止まり、端末の時計が60秒進んでいる。未同期の行0は補正前の端末の時計 floor(at / hold)
+	const device = base + 60_000;
+	const dir = `${DIR}/unsynced-${info.project.name}`;
+	mkdirSync(dir, { recursive: true });
+	await page.evaluate(
+		({ device, hold }) => {
+			const strip = document.querySelector<HTMLCanvasElement>("#timecode .tc-strip")!;
+			const ctx = strip.getContext("2d")!;
+			const imgs = [0, 1].map((k) => {
+				window.__timecode.renderAt(null, 1, { n: 1, t: null }, 2, device + k * hold + 3);
+				return ctx.getImageData(0, 0, strip.width, strip.height);
+			});
+			const out = imgs[0];
+			for (let p = 0; p < out.data.length; p++) out.data[p] = Math.round((imgs[0].data[p] + imgs[1].data[p]) / 2);
+			ctx.putImageData(out, 0, 0);
+		},
+		{ device, hold },
+	);
+	await page.screenshot({ path: `${dir}/00.png` });
+	// 同期できたあとの、正しい QR アンカー
+	await page.evaluate((base) => window.__timecode.renderAt(base + 500, 50, { n: 50, t: base + 500 }), base);
+	await page.screenshot({ path: `${dir}/01.png` });
+	const video = `${DIR}/${info.project.name}-unsynced.mkv`;
+	execFileSync(process.env.FFMPEG ?? "ffmpeg", ["-v", "error", "-y", "-framerate", "10", "-i", `${dir}/%02d.png`, "-c:v", "ffv1", "-pix_fmt", "gray", video]);
+	const results = [];
+	for (const [name, extra] of [
+		["no-around", ["--qr-every", "1"]],
+		["around", ["--qr-every", "1", "--around", String(base)]],
+	] as const) {
+		const rows = decode([video], `${DIR}/${info.project.name}-unsynced-${name}.csv`, [...extra]);
+		results.push({ name, rows: rows.map((r) => ({ status: r.status, n: r.n, n_hi: r.n_hi, t: r.t_ms, t_lo: r.t_lo_ms, t_hi: r.t_hi_ms, t_est: r.t_est_ms, qr: r.qr })) });
+		const [smear, valid] = rows;
+		expect(smear.qr).toMatch(/ T- /);
+		expect(smear.status, name).toBe("unsynced");
+		expect(smear.t_ms).toBeNull();
+		expect(smear.t_lo_ms).toBeNull();
+		expect(smear.t_hi_ms).toBeNull();
+		expect(smear.t_est_ms).toBeNull();
+		expect(valid.status).toBe("ok");
+		expect(valid.t_ms).toBe(base + 500);
+	}
+	save(`${info.project.name}-timecode-unsynced`, results);
+});

@@ -168,8 +168,8 @@ export function mountTimecode(container: HTMLElement, clock: Clock, zoneOffset: 
 	};
 
 	window.__timecode = {
-		renderAt(t: number | null, frameN: number, anchor?: Anchor, format: 1 | 2 = 2) {
-			const at = mono();
+		renderAt(t: number | null, frameN: number, anchor?: Anchor, format: 1 | 2 = 2, deviceAt = mono()) {
+			const at = deviceAt;
 			frozen ??= snapshot(clock, t, at, 1000 / 60, 0, zoneMinutes(t ?? at), hold);
 			if (format === 1) render(frameN, t, frozen, anchor ?? { n: frameN, t });
 			else {
@@ -194,7 +194,7 @@ declare global {
 	interface Window {
 		__timecode: {
 			/** format 2（既定）は保持型で、行0は floor(t / hold)。n は QR のアンカーにだけ使う。format 1 は描画ごとの旧形式 */
-			renderAt: (t: number | null, n: number, anchor?: { n: number; t: number | null }, format?: 1 | 2) => void;
+			renderAt: (t: number | null, n: number, anchor?: { n: number; t: number | null }, format?: 1 | 2, at?: number) => void;
 			hold: () => number;
 			live: () => void;
 			/** 時刻帯を描き直した記録。n は行0の値（v2 では floor(t / hold)） */
