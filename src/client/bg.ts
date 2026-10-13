@@ -1,10 +1,11 @@
+import { settings } from "./settings.ts";
+
 /** 時計の後ろで、インクを落とした水のような流体を動かす背景（docs/failure-modes.md の B1〜B11） */
 
 const STEP = 1 / 60;
 const MAX_STEPS_PER_FRAME = 4;
 const PRESSURE_ITERS = 20;
 const STILL_STEPS = 420;
-const WARM_STEPS = 90;
 const VEL_DISSIPATION = 0.2;
 const DYE_DISSIPATION = 0.28;
 const CURL = 35;
@@ -15,7 +16,7 @@ const DISPLAY_SCALE = 3;
 const LUM_CAP = 0.028;
 const CHANNEL_CAP = 0.16;
 
-type Mode = "fluid" | "still" | "static" | "off";
+type Mode = "fluid" | "settling" | "still" | "static" | "off";
 
 interface Emitter {
 	cx: number;
@@ -298,7 +299,7 @@ type Prog = { p: WebGLProgram; u: Record<string, WebGLUniformLocation | null> };
 type Target = { tex: WebGLTexture; fb: WebGLFramebuffer; w: number; h: number };
 type Double = { read: Target; write: Target; swap: () => void };
 
-function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
+async function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 	// ソフトウェア描画の WebGL（SwiftShader など）では、流体の計算がCPUを奪って時刻の問い合わせの往復時間まで伸ばすので、使わずに静止背景にする
 	const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: false, preserveDrawingBuffer: false, powerPreference: "low-power", failIfMajorPerformanceCaveat: !allowSoftware });
 	if (!gl) throw new Error("WebGL2 が使えない、またはGPUで描けない");
@@ -315,17 +316,23 @@ function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 		const s = gl.createShader(type)!;
 		gl.shaderSource(s, src);
 		gl.compileShader(s);
-		if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s) ?? "shader");
 		return s;
 	};
 	const vs = compile(gl.VERTEX_SHADER, VERT);
+	const linked = Object.entries(FRAG).map(([k, src]) => {
+		const fs = compile(gl.FRAGMENT_SHADER, src);
+		const p = gl.createProgram()!;
+		gl.attachShader(p, vs);
+		gl.attachShader(p, fs);
+		gl.linkProgram(p);
+		return { k, p, fs };
+	});
+	// 結果をすぐ問い合わせないのは、問い合わせた時点でコンパイルが終わるまで待たされ、時計の描画が1フレーム以上止まるため（実GPUで約100msの停止を観測した）
+	const parallel = gl.getExtension("KHR_parallel_shader_compile");
+	if (parallel) while (!linked.every(({ p }) => gl.getProgramParameter(p, parallel.COMPLETION_STATUS_KHR))) await new Promise(requestAnimationFrame);
 	const progs = Object.fromEntries(
-		Object.entries(FRAG).map(([k, src]) => {
-			const p = gl.createProgram()!;
-			gl.attachShader(p, vs);
-			gl.attachShader(p, compile(gl.FRAGMENT_SHADER, src));
-			gl.linkProgram(p);
-			if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p) ?? "link");
+		linked.map(({ k, p, fs }) => {
+			if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(`${gl.getShaderInfoLog(fs) ?? ""}${gl.getShaderInfoLog(vs) ?? ""}${gl.getProgramInfoLog(p) ?? "link"}`);
 			const u: Prog["u"] = {};
 			const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS) as number;
 			for (let i = 0; i < n; i++) {
@@ -502,6 +509,7 @@ function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 		if (Math.abs(Math.log(next.aspect / grid.aspect)) < 0.15) return false;
 		grid = next;
 		allocate();
+		steps = 0;
 		return true;
 	};
 
@@ -547,6 +555,7 @@ declare global {
 	}
 }
 
+/** 最初の同期が終わってから呼ぶ。シェーダーのコンパイルや初回の計算が、最初の問い合わせの往復時間に混ざらないようにするため */
 export function startBackground() {
 	const param = new URLSearchParams(location.search).get("bg");
 	if (param === "off") return;
@@ -559,16 +568,20 @@ export function startBackground() {
 	if (grain) host.style.setProperty("--bg-grain", `url(${grain})`);
 	document.body.prepend(host);
 
-	const reduce = matchMedia("(prefers-reduced-motion: reduce)");
 	let mode: Mode = "off";
-	let fluid: ReturnType<typeof createFluid> | null = null;
+	let fluid: Awaited<ReturnType<typeof createFluid>> | null = null;
 	let raf = 0;
 	let last = 0;
 	let acc = 0;
 	let frameMs = 0;
 
-	const fallback = () => {
+	const stop = () => {
 		cancelAnimationFrame(raf);
+		raf = 0;
+	};
+
+	const fallback = () => {
+		stop();
 		fluid = null;
 		// WebGL の文脈を一度取ったキャンバスでは2Dの文脈が取れないので、差し替える
 		const fresh = document.createElement("canvas");
@@ -581,53 +594,65 @@ export function startBackground() {
 		};
 	};
 
-	const frame = (ts: number) => {
-		raf = requestAnimationFrame(frame);
-		if (!fluid) return;
-		const t0 = performance.now();
-		try {
+	const guarded = (body: (ts: number) => boolean) => {
+		const tick = (ts: number) => {
+			if (!fluid) return;
+			const t0 = performance.now();
+			let again: boolean;
+			try {
+				again = body(ts);
+			} catch {
+				fallback();
+				return;
+			}
+			frameMs += (performance.now() - t0 - frameMs) * 0.05;
+			raf = again ? requestAnimationFrame(tick) : 0;
+		};
+		stop();
+		raf = requestAnimationFrame(tick);
+	};
+
+	const animate = () => {
+		if (!fluid || document.hidden) return;
+		mode = "fluid";
+		last = 0;
+		acc = 0;
+		guarded((ts) => {
 			if (last) acc += Math.min((ts - last) / 1000, MAX_STEPS_PER_FRAME * STEP);
 			last = ts;
 			let n = 0;
 			while (acc >= STEP && n < MAX_STEPS_PER_FRAME) {
-				fluid.step();
+				fluid!.step();
 				acc -= STEP;
 				n++;
 			}
-			if (n) fluid.render();
-		} catch {
-			fallback();
-			return;
-		}
-		frameMs += (performance.now() - t0 - frameMs) * 0.05;
+			if (n) fluid!.render();
+			return true;
+		});
 	};
-
+	// 静止画までの計算を1フレームでまとめて行わないのは、数百回ぶんの計算で時計の描画が止まるため。毎フレーム上限の回数だけ進め、描くのは最後の1回だけにする
 	const still = () => {
 		if (!fluid) return;
-		cancelAnimationFrame(raf);
-		raf = 0;
-		mode = "still";
-		while (fluid.info().steps < STILL_STEPS) fluid.step();
-		fluid.render();
+		mode = "settling";
+		guarded(() => {
+			for (let i = 0; i < MAX_STEPS_PER_FRAME && fluid!.info().steps < STILL_STEPS; i++) fluid!.step();
+			if (fluid!.info().steps < STILL_STEPS) return true;
+			fluid!.render();
+			mode = "still";
+			return false;
+		});
 	};
-	const animate = () => {
-		if (!fluid || document.hidden) return;
-		cancelAnimationFrame(raf);
-		mode = "fluid";
-		last = 0;
-		acc = 0;
-		raf = requestAnimationFrame(frame);
-	};
-	const apply = () => (reduce.matches ? still() : animate());
+	// prefers-reduced-motion を直接見ないのは、OSの設定は設定の「アニメーション」の既定値として既に反映され、利用者が明示的に入れた値を優先すべきだから
+	const apply = () => (settings.get("animation") ? animate() : still());
 
 	window.__bg = {
 		stats: () => ({ mode, meanLum: 0, maxLum: 0, hash: 0, frameMs: 0 }),
 		bench: () => null,
 	};
 
-	const init = () => {
+	const init = async () => {
 		try {
-			fluid = createFluid(canvas, param === "force");
+			fluid = await createFluid(canvas, param === "force");
 		} catch {
 			fallback();
 			return;
@@ -636,8 +661,6 @@ export function startBackground() {
 			e.preventDefault();
 			fallback();
 		});
-		for (let i = 0; i < WARM_STEPS; i++) fluid.step();
-		fluid.render();
 		window.__bg = {
 			stats: () => (fluid ? { mode, ...pixelStats(fluid.read()), frameMs, ...fluid.info() } : { mode, meanLum: 0, maxLum: 0, hash: 0, frameMs: 0 }),
 			bench: (n: number) => {
@@ -656,20 +679,15 @@ export function startBackground() {
 		apply();
 	};
 
-	reduce.addEventListener("change", apply);
+	settings.subscribe("animation", apply);
 	document.addEventListener("visibilitychange", () => {
 		if (document.hidden) {
-			cancelAnimationFrame(raf);
-			raf = 0;
+			if (mode === "fluid") stop();
 		} else if (mode === "fluid") animate();
 	});
 	addEventListener("resize", () => {
-		if (fluid?.resize()) {
-			fluid.step();
-			fluid.render();
-		}
+		if (fluid?.resize()) apply();
 	});
 
-	// 時計の最初の描画を背景の初期化（シェーダーのコンパイル）で遅らせないよう、1フレーム待ってから始める
-	requestAnimationFrame(() => setTimeout(init, 0));
+	init();
 }

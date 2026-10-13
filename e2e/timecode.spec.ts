@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { expect, type Page, test } from "@playwright/test";
-import { mockSources, save, waitRounds } from "./helpers.ts";
+import { confirmed, decode, mockSources, save, waitRounds } from "./helpers.ts";
 
 const DIR = "artifacts/timecode";
 const ALL_OK = { edge: 0, akamai: 0, nict: 0, timeapi: 0, timenow: 0 };
@@ -14,54 +14,6 @@ async function open(page: Page, query = "?code=1") {
 	await waitRounds(page, 1);
 }
 
-type Decoded = {
-	frame: number;
-	pts: number | null;
-	status: string;
-	n: number | null;
-	n_hi: number | null;
-	frac: number | null;
-	n_t: number | null;
-	t_ms: number | null;
-	t_est_ms: number | null;
-	qr: string;
-};
-
-/** tools/decode-timecode.ts を CLI として実行し、CSV を読む */
-function decode(files: string[], csvPath: string, extra: string[] = []): Decoded[] {
-	execFileSync(process.execPath, ["tools/decode-timecode.ts", ...files, "--out", csvPath, ...extra], { stdio: ["ignore", "ignore", "inherit"] });
-	const [head, ...lines] = readFileSync(csvPath, "utf8").trim().split("\n");
-	const cols = head.split(",");
-	return lines.map((line) => {
-		const cells: string[] = [];
-		let cur = "";
-		let quoted = false;
-		for (const ch of line) {
-			if (ch === '"') quoted = !quoted;
-			else if (ch === "," && !quoted) {
-				cells.push(cur);
-				cur = "";
-			} else cur += ch;
-		}
-		cells.push(cur);
-		const o = Object.fromEntries(cols.map((c, i) => [c, cells[i]]));
-		const num = (v: string) => (v === "" ? null : Number(v));
-		return {
-			frame: Number(o.frame),
-			pts: num(o.pts),
-			status: o.status,
-			n: num(o.n),
-			n_hi: num(o.n_hi),
-			frac: num(o.frac),
-			n_t: num(o.n_t),
-			t_ms: num(o.t_ms),
-			t_est_ms: num(o.t_est_ms),
-			qr: o.qr,
-		};
-	});
-}
-
-const confirmed = (r: Decoded) => (r.status === "ok" || r.status === "mixed") && r.t_ms !== null;
 
 test("決まった時刻を描かせたスクリーンショットから、デコーダがその時刻と番号をそのまま返す", async ({ page }, info) => {
 	await open(page);

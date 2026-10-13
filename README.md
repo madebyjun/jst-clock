@@ -11,6 +11,7 @@ pnpm typecheck
 pnpm test:e2e     # ビルド → プレビュー → E2E。結果は artifacts/e2e-report.md とスクショ、時刻コードは artifacts/timecode/（ffmpeg が必要）
 BASE_URL=https://… pnpm test:e2e   # デプロイ済みのURLに対して実行
 OFFLINE=1 pnpm test:e2e            # 実ネットワーク試験を飛ばす
+GPU=1 pnpm test:e2e                # macOS の実GPU（Metal）で描かせ、背景の流体を動かしたまま全試験を走らせる。背景の録画とスクショは artifacts/bg/
 pnpm assets       # OG画像とファビコンのPNGを scripts/og.html・public/favicon.svg から作り直す（生成物はコミットする）
 pnpm run deploy   # cf deploy（手動）。その後 BASE_URL を付けて E2E を流し、本番の自前Workerを確かめる
 ```
@@ -23,6 +24,7 @@ pnpm run deploy   # cf deploy（手動）。その後 BASE_URL を付けて E2E 
 - `?lag=ms` 表示遅れを手動で足す（描画1フレーム分は自動で補正済み。保存しない）
 - `?tz=Area/City` タイムゾーンを指定する（保存しない。存在しない名前なら端末のタイムゾーン）
 - `?code=1` / `?code=0` 映像から機械で読める時刻帯（毎フレーム）と、補正の状態を載せたQR（2Hz）を数字の下に出す・出さない（保存しない。保存するなら設定の「機械可読タイムコード」）。設計は [docs/timecode.md](docs/timecode.md)
+- `?bg=off` 背景（インクの流体）を出さない。`?bg=force` GPUが無くソフトウェア描画になる端末でも流体を動かす（どちらも保存しない。動きを止めるだけなら設定の「アニメーション」）
 
 ## 撮影した映像から時刻を読む
 

@@ -241,6 +241,7 @@ document.addEventListener("visibilitychange", () => {
 async function start() {
 	keepAwake();
 	await burst();
+	startBackground();
 	setInterval(() => clock.round().then(renderStatus), ROUND_INTERVAL_MS);
 }
 
@@ -256,5 +257,4 @@ if (!redirecting) {
 	}, 500);
 	requestAnimationFrame(frame);
 	start();
-	startBackground();
 }

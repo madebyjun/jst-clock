@@ -1,11 +1,13 @@
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { type BrowserContextOptions, expect, type Page, test } from "@playwright/test";
-import { mockSources, waitRounds } from "./helpers.ts";
+import { confirmed, decode, mockSources, save, waitRounds } from "./helpers.ts";
+
+test.use({ locale: "ja-JP", timezoneId: "Asia/Tokyo" });
 
 const ALL_OK = { edge: 0, akamai: 0, nict: 0, timeapi: 0, timenow: 0 } as const;
 const DIR = "artifacts/bg";
 // ヘッドレスChromiumの WebGL はソフトウェア描画で、既定では静止背景になる。流体そのものを確かめるため強制する
-const FLUID = "/?bg=force";
+const FLUID = "/ja/?bg=force";
 // --bg (#050607) そのものの相対輝度。これより十分明るければインクが残っている
 const BASE_LUM = 0.0017;
 
@@ -17,14 +19,9 @@ async function waitMode(page: Page, mode: string) {
 	await page.waitForFunction((m) => window.__bg?.stats().mode === m, mode, { timeout: 15_000 });
 }
 
-function save(name: string, data: unknown) {
-	mkdirSync("artifacts/results", { recursive: true });
-	writeFileSync(`artifacts/results/${name}.json`, JSON.stringify(data, null, 2));
-}
-
 const device = () => test.info().project.name.replace(/-bg$/, "");
 
-const hideMain = (page: Page) => page.addStyleTag({ content: "main { visibility: hidden !important; }" });
+const hideMain = (page: Page) => page.addStyleTag({ content: "main, .about { visibility: hidden !important; }" });
 
 /** スクリーンショットのPNGをページ内で復号し、各画素の相対輝度を返す（Node側にPNGの復号器を足さないため） */
 async function lumOf(page: Page, png: Buffer) {
@@ -54,8 +51,8 @@ test("背景のキャンバスが時計の後ろにあり、インクが見え�
 		return { z: bg.zIndex, pe: bg.pointerEvents, pos: bg.position, covers: r.width >= innerWidth - 1 && r.height >= innerHeight - 1 };
 	});
 	expect(layer).toEqual({ z: "-1", pe: "none", pos: "fixed", covers: true });
-	const s = await stats(page);
-	expect(s.meanLum).toBeGreaterThan(BASE_LUM * 1.5);
+	// インクは空の水から注ぎ始めるので、見えるまで少し待つ
+	await expect.poll(async () => (await stats(page)).meanLum, { timeout: 10_000 }).toBeGreaterThan(BASE_LUM * 1.5);
 });
 
 test("背景は動いている", async ({ page }) => {
@@ -84,20 +81,21 @@ test("動きを減らす設定では、背景は1枚の静止画になる", asyn
 
 test("GPUで描けない環境では、静止背景にして明るすぎない", async ({ page }) => {
 	await mockSources(page, ALL_OK);
-	await page.goto("/");
+	await page.goto("/ja/");
 	await page.waitForFunction(() => window.__bg && window.__bg.stats().mode !== "off");
 	const s = await stats(page);
-	save(`bg-${device()}-default`, s);
 	// 実GPUのある環境で走らせたときは流体になる。どちらでも明るさの上限は同じ
 	expect(["static", "fluid"]).toContain(s.mode);
 	await expect(page.locator("#bg canvas")).toBeVisible();
-	expect(s.meanLum).toBeGreaterThan(BASE_LUM * 1.5);
-	expect(s.maxLum).toBeLessThan(0.035);
+	await expect.poll(async () => (await stats(page)).meanLum, { timeout: 10_000 }).toBeGreaterThan(BASE_LUM * 1.5);
+	const settled = await stats(page);
+	save(`bg-${device()}-default`, settled);
+	expect(settled.maxLum).toBeLessThan(0.035);
 });
 
 test("?bg=off で背景を作らない", async ({ page }) => {
 	await mockSources(page, ALL_OK);
-	await page.goto("/?bg=off");
+	await page.goto("/ja/?bg=off");
 	await waitRounds(page, 1);
 	await expect(page.locator("#bg")).toHaveCount(0);
 	expect(await page.evaluate(() => window.__bg === undefined)).toBe(true);
@@ -125,6 +123,7 @@ test("数字と、その真後ろの背景の輝度比が 7:1 を大きく上回
 	await hidden.evaluate((el) => (el as HTMLElement).remove());
 	const ratio = (fg + 0.05) / (bgMax + 0.05);
 	save(`bg-${device()}-contrast`, { fg, bgMax, ratio });
+	// 依頼の下限は 9:1。輝度の上限からは約12:1 になるはずなので、それより下がったら上限の仕組みが壊れている
 	expect(ratio).toBeGreaterThan(10);
 });
 
@@ -144,6 +143,65 @@ test("15秒動かしても、インクが消え切らず、飽和もしない", 
 	expect(s.meanLum).toBeGreaterThan(BASE_LUM * 1.5);
 	expect(s.meanLum).toBeLessThan(0.02);
 	expect(s.maxLum).toBeLessThan(0.035);
+});
+
+/** 500ms 離れた2回の描画結果が同じか */
+async function changes(page: Page) {
+	const a = (await stats(page)).hash;
+	await page.waitForTimeout(500);
+	return (await stats(page)).hash !== a;
+}
+
+test("設定の「アニメーション」で流体が止まり・動き出し、再読み込み後も止まったまま", async ({ page }) => {
+	await mockSources(page, ALL_OK);
+	await page.goto(FLUID);
+	await waitMode(page, "fluid");
+	expect(await changes(page)).toBe(true);
+
+	await page.locator("#open-settings").click();
+	await page.locator('#settings [name="animation"]').uncheck();
+	await page.keyboard.press("Escape");
+	await waitMode(page, "still");
+	expect(await changes(page)).toBe(false);
+
+	await page.reload();
+	await waitRounds(page, 3);
+	await waitMode(page, "still");
+	await expect(page.locator("html")).toHaveAttribute("data-animation", "off");
+	expect(await changes(page)).toBe(false);
+
+	await page.locator("#open-settings").click();
+	await page.locator('#settings [name="animation"]').check();
+	await page.keyboard.press("Escape");
+	await waitMode(page, "fluid");
+	expect(await changes(page)).toBe(true);
+});
+
+test("背景を動かしたままでも、機械可読タイムコードがそのまま読める", async ({ page }) => {
+	test.setTimeout(60_000);
+	await mockSources(page, ALL_OK);
+	await page.goto(`${FLUID}&code=1`);
+	await waitRounds(page, 1);
+	await waitMode(page, "fluid");
+	await page.waitForFunction(() => /^JC1 \S+ T\d/.test(window.__timecode.qr() ?? ""));
+	mkdirSync(DIR, { recursive: true });
+	const files: string[] = [];
+	const drawn: { n: number; t: number | null }[][] = [];
+	for (let i = 0; i < 4; i++) {
+		const f = `${DIR}/${device()}-timecode-${i}.png`;
+		await page.screenshot({ path: f });
+		files.push(f);
+		drawn.push(await page.evaluate(() => window.__timecode.log().slice(-30)));
+		await page.waitForTimeout(400);
+	}
+	const rows = decode(files, `${DIR}/${device()}-timecode.csv`);
+	const result = rows.map((r, i) => ({ status: r.status, t: r.t_ms, n: r.n_t, drawnByPage: drawn[i].some((e) => e.n === r.n_t && e.t === r.t_ms) }));
+	save(`bg-${device()}-timecode`, { bg: await stats(page), result });
+	for (const r of rows) expect(confirmed(r), r.status).toBe(true);
+	for (const r of result) {
+		expect(r.status).toBe("ok");
+		expect(r.drawnByPage).toBe(true);
+	}
 });
 
 test("撮影した見た目を残す（スクリーンショットと動画）", async ({ browser }, info) => {
