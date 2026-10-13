@@ -15,8 +15,9 @@ type Stats = { mode: string; meanLum: number; maxLum: number; hash: number; fram
 
 const stats = (page: Page): Promise<Stats> => page.evaluate(() => window.__bg!.stats());
 
+// 待ち合わせに stats() を使わないのは、毎回描き直して全画素を読み出すため、ソフトウェア描画では問い合わせ自体が待ちを長くするから
 async function waitMode(page: Page, mode: string) {
-	await page.waitForFunction((m) => window.__bg?.stats().mode === m, mode, { timeout: 15_000 });
+	await page.waitForFunction((m) => window.__bg?.state().mode === m, mode, { timeout: 15_000 });
 }
 
 const device = () => test.info().project.name.replace(/-bg$/, "");
@@ -73,16 +74,18 @@ test("動きを減らす設定では、背景は1枚の静止画になる", asyn
 	await waitMode(page, "still");
 	await hideMain(page);
 	const a = await page.screenshot();
-	await page.waitForTimeout(500);
+	expect(await changes(page)).toEqual(STOPPED);
 	const b = await page.screenshot();
 	expect(a.equals(b)).toBe(true);
+	mkdirSync(DIR, { recursive: true });
+	await page.screenshot({ path: `${DIR}/C-ink-${device()}-still.png` });
 	expect((await stats(page)).meanLum).toBeGreaterThan(BASE_LUM * 1.5);
 });
 
 test("GPUで描けない環境では、静止背景にして明るすぎない", async ({ page }) => {
 	await mockSources(page, ALL_OK);
 	await page.goto("/ja/");
-	await page.waitForFunction(() => window.__bg && window.__bg.stats().mode !== "off");
+	await page.waitForFunction(() => window.__bg && window.__bg.state().mode !== "off");
 	const s = await stats(page);
 	// 実GPUのある環境で走らせたときは流体になる。どちらでも明るさの上限は同じ
 	expect(["static", "fluid"]).toContain(s.mode);
@@ -145,36 +148,43 @@ test("15秒動かしても、インクが消え切らず、飽和もしない", 
 	expect(s.maxLum).toBeLessThan(0.035);
 });
 
-/** 500ms 離れた2回の描画結果が同じか */
+/** 500ms のあいだに、背景を描き直したか（描画回数）と、描かれた画素が変わったか（ハッシュ） */
 async function changes(page: Page) {
-	const a = (await stats(page)).hash;
+	const probe = () => page.evaluate(() => ({ renders: window.__bg!.state().renders, hash: window.__bg!.stats().hash }));
+	const a = await probe();
 	await page.waitForTimeout(500);
-	return (await stats(page)).hash !== a;
+	const b = await probe();
+	return { redrawn: b.renders > a.renders, pixelsChanged: b.hash !== a.hash };
 }
 
+const MOVING = { redrawn: true, pixelsChanged: true };
+const STOPPED = { redrawn: false, pixelsChanged: false };
+
 test("設定の「アニメーション」で流体が止まり・動き出し、再読み込み後も止まったまま", async ({ page }) => {
+	// 再読み込みをはさみ、同期3回と静止画の計算を2度待つ
+	test.setTimeout(60_000);
 	await mockSources(page, ALL_OK);
 	await page.goto(FLUID);
 	await waitMode(page, "fluid");
-	expect(await changes(page)).toBe(true);
+	expect(await changes(page)).toEqual(MOVING);
 
 	await page.locator("#open-settings").click();
 	await page.locator('#settings [name="animation"]').uncheck();
 	await page.keyboard.press("Escape");
 	await waitMode(page, "still");
-	expect(await changes(page)).toBe(false);
+	expect(await changes(page)).toEqual(STOPPED);
 
 	await page.reload();
 	await waitRounds(page, 3);
 	await waitMode(page, "still");
 	await expect(page.locator("html")).toHaveAttribute("data-animation", "off");
-	expect(await changes(page)).toBe(false);
+	expect(await changes(page)).toEqual(STOPPED);
 
 	await page.locator("#open-settings").click();
 	await page.locator('#settings [name="animation"]').check();
 	await page.keyboard.press("Escape");
 	await waitMode(page, "fluid");
-	expect(await changes(page)).toBe(true);
+	expect(await changes(page)).toEqual(MOVING);
 });
 
 test("背景を動かしたままでも、機械可読タイムコードがそのまま読める", async ({ page }) => {

@@ -5,7 +5,9 @@ import { settings } from "./settings.ts";
 const STEP = 1 / 60;
 const MAX_STEPS_PER_FRAME = 4;
 const PRESSURE_ITERS = 20;
-const STILL_STEPS = 420;
+// 静止画は流体が育つまで進めてから描く。毎フレームと同じ細かい刻みで進めないのは、ソフトウェア描画では数百回ぶんの計算に十数秒かかるため。半ラグランジュ移流は大きな刻みでも発散しないので、粗い刻みで同じ時間だけ進める
+const STILL_SIM_SECONDS = 4;
+const STILL_STEP = 1 / 15;
 const VEL_DISSIPATION = 0.2;
 const DYE_DISSIPATION = 0.28;
 const CURL = 35;
@@ -401,8 +403,10 @@ async function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 	const base = hexToLinear(css("--bg"));
 	let t = 0;
 	let steps = 0;
+	let age = 0;
+	let renders = 0;
 
-	const step = () => {
+	const step = (dt = STEP) => {
 		const { W, H, aspect } = grid;
 		const tx: [number, number] = [1 / W, 1 / H];
 		const E = new Float32Array(16);
@@ -421,7 +425,7 @@ async function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 			bind("uSrc", f.read);
 			gl.uniform1i(progs.splat.u.uMode, mode);
 			gl.uniform1f(progs.splat.u.uAspect, aspect);
-			gl.uniform1f(progs.splat.u.uDt, STEP);
+			gl.uniform1f(progs.splat.u.uDt, dt);
 			gl.uniform2f(progs.splat.u.uGrid, W, H);
 			gl.uniform4fv(progs.splat.u.uE, E);
 			gl.uniform4fv(progs.splat.u.uV, V);
@@ -438,7 +442,7 @@ async function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 		bind("uVel", vel.read);
 		bind("uCurl", curl);
 		gl.uniform1f(progs.vorticity.u.uCurlK, CURL);
-		gl.uniform1f(progs.vorticity.u.uDt, STEP);
+		gl.uniform1f(progs.vorticity.u.uDt, dt);
 		draw(vel.write);
 		vel.swap();
 
@@ -470,18 +474,19 @@ async function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 			bind = use(progs.advect, tx);
 			bind("uVel", vel.read);
 			bind("uSrc", f.read);
-			gl.uniform1f(progs.advect.u.uDt, STEP);
-			gl.uniform1f(progs.advect.u.uDiss, Math.exp(-rate * STEP));
+			gl.uniform1f(progs.advect.u.uDt, dt);
+			gl.uniform1f(progs.advect.u.uDiss, Math.exp(-rate * dt));
 			gl.uniform1f(progs.advect.u.uMaxV, MAX_SPEED);
 			gl.uniform1i(progs.advect.u.uMode, mode);
 			draw(f.write);
 			f.swap();
 		}
-		t += STEP;
+		t += dt;
+		age += dt;
 		steps++;
 	};
 
-	const render = () => {
+	const paint = () => {
 		const dt: [number, number] = [1 / tmp.w, 1 / tmp.h];
 		let bind = use(progs.blur, dt);
 		bind("uSrc", dye.read);
@@ -495,9 +500,14 @@ async function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 		gl.uniform1f(progs.display.u.uChanCap, CHANNEL_CAP);
 		draw(null);
 	};
+	const render = () => {
+		paint();
+		renders++;
+	};
 
+	// 読み出しのために描き直すぶんは描画回数に数えない。数えると、止まっているかを確かめる問い合わせ自体が「描いた」ことになる
 	const read = () => {
-		render();
+		paint();
 		const px = new Uint8Array(canvas.width * canvas.height * 4);
 		gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, px);
 		return px;
@@ -509,7 +519,7 @@ async function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 		if (Math.abs(Math.log(next.aspect / grid.aspect)) < 0.15) return false;
 		grid = next;
 		allocate();
-		steps = 0;
+		age = 0;
 		return true;
 	};
 
@@ -519,7 +529,7 @@ async function createFluid(canvas: HTMLCanvasElement, allowSoftware: boolean) {
 		render,
 		read,
 		resize,
-		info: () => ({ simW: grid.W, simH: grid.H, steps, simTime: t, renderer }),
+		info: () => ({ simW: grid.W, simH: grid.H, steps, simTime: t, age, renders, renderer }),
 	};
 }
 
@@ -549,6 +559,9 @@ function drawStatic(canvas: HTMLCanvasElement) {
 declare global {
 	interface Window {
 		__bg?: {
+			/** 画素を読まない軽い問い合わせ。待ち合わせ用 */
+			state: () => { mode: Mode; steps: number; renders: number };
+			/** 描画結果を読み出して集計する。重いので必要なときだけ呼ぶ */
 			stats: () => { mode: Mode; meanLum: number; maxLum: number; hash: number; frameMs: number; simW?: number; simH?: number; steps?: number; simTime?: number; renderer?: string };
 			bench: (n: number) => number | null;
 		};
@@ -588,6 +601,7 @@ export function startBackground() {
 		canvas.replaceWith(fresh);
 		drawStatic(fresh);
 		mode = "static";
+		window.__bg!.state = () => ({ mode, steps: 0, renders: 1 });
 		window.__bg!.stats = () => {
 			const g = fresh.getContext("2d")!;
 			return { mode, ...pixelStats(g.getImageData(0, 0, fresh.width, fresh.height).data), frameMs: 0 };
@@ -630,13 +644,13 @@ export function startBackground() {
 			return true;
 		});
 	};
-	// 静止画までの計算を1フレームでまとめて行わないのは、数百回ぶんの計算で時計の描画が止まるため。毎フレーム上限の回数だけ進め、描くのは最後の1回だけにする
+	// 静止画までの計算を1フレームでまとめて行わないのは、時計の描画が止まるため。毎フレーム上限の回数だけ進め、描くのは最後の1回だけにする。流体がすでに育っていれば、その場の状態をすぐ描いて止める
 	const still = () => {
 		if (!fluid) return;
 		mode = "settling";
 		guarded(() => {
-			for (let i = 0; i < MAX_STEPS_PER_FRAME && fluid!.info().steps < STILL_STEPS; i++) fluid!.step();
-			if (fluid!.info().steps < STILL_STEPS) return true;
+			for (let i = 0; i < MAX_STEPS_PER_FRAME && fluid!.info().age < STILL_SIM_SECONDS; i++) fluid!.step(STILL_STEP);
+			if (fluid!.info().age < STILL_SIM_SECONDS) return true;
 			fluid!.render();
 			mode = "still";
 			return false;
@@ -646,6 +660,7 @@ export function startBackground() {
 	const apply = () => (settings.get("animation") ? animate() : still());
 
 	window.__bg = {
+		state: () => ({ mode, steps: 0, renders: 0 }),
 		stats: () => ({ mode, meanLum: 0, maxLum: 0, hash: 0, frameMs: 0 }),
 		bench: () => null,
 	};
@@ -662,6 +677,7 @@ export function startBackground() {
 			fallback();
 		});
 		window.__bg = {
+			state: () => (fluid ? { mode, steps: fluid.info().steps, renders: fluid.info().renders } : { mode, steps: 0, renders: 0 }),
 			stats: () => (fluid ? { mode, ...pixelStats(fluid.read()), frameMs, ...fluid.info() } : { mode, meanLum: 0, maxLum: 0, hash: 0, frameMs: 0 }),
 			bench: (n: number) => {
 				if (!fluid) return null;
